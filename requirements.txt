@@ -1,0 +1,5 @@
+axial-positional-embedding>=0.1.0
+einops
+local-attention
+product-key-memory
+torch

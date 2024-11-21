@@ -6,14 +6,14 @@ from torchvision import datasets, transforms
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from tqdm import tqdm
 from reformer.reformer_pytorch import ViRWithArcMargin
-from utils.datasets import get_dataloaders
+from utils.datasets import get_dataloaders, get_lpfw_dataloaders
 from torch.utils.tensorboard import SummaryWriter
 
 # Initialize TensorBoard
 writer = SummaryWriter("runs/vir_training")
 
 # Create checkpoint directory
-checkpoint_dir = "checkpoints"
+checkpoint_dir = "runs/vir_training"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 # Device configuration
@@ -21,12 +21,16 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Using device:", device)
 
 # Dataset 
-data_dir = "path/to/your/dataset"  # Root directory containing 'train' and 'test' subfolders
+#data_dir = "path/to/your/dataset"  # Root directory containing 'train' and 'test' subfolders
 batch_size = 32
-train_loader, test_loader = get_dataloaders(data_dir, batch_size=batch_size, num_workers=4)
+#train_loader, test_loader = get_dataloaders(data_dir, batch_size=batch_size, num_workers=4)
+train_loader, test_loader = get_lpfw_dataloaders(batch_size)
 
 # Define model
-num_classes = len(train_loader.dataset.labels)
+#num_classes = len(train_loader.dataset.dataset.classes)
+num_classes = len(train_loader.dataset.dataset.class_to_idx)
+
+
 model = ViRWithArcMargin(
     image_size=224, 
     patch_size=16, 

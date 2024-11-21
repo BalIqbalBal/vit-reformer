@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision import datasets, transforms
 from torchvision.transforms import InterpolationMode
 from PIL import Image
@@ -93,5 +93,23 @@ def get_dataloaders(data_dir, batch_size=32, num_workers=4):
     # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    return train_loader, test_loader
+
+def get_lpfw_dataloaders(batch_size):
+
+    dataset_root = "./lfw_dataset"
+
+    train_transform = get_transforms(phase="train")
+    #test_transform = get_transforms(phase="test")
+
+    dataset = datasets.LFWPeople(root=dataset_root, split='train', download=True, transform=train_transform)
+
+    train_size = int(0.8 * len(dataset))
+    test_size = len(dataset) - train_size
+    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, test_loader
