@@ -14,7 +14,7 @@ from einops.layers.torch import Rearrange
 from local_attention import LocalAttention
 from axial_positional_embedding import AxialPositionalEmbedding
 from product_key_memory import PKM
-from reformer_pytorch.reversible import ReversibleSequence
+from reversible import ReversibleSequence
 
 from einops import rearrange, repeat
 
