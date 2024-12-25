@@ -1,53 +1,96 @@
 import os
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from tqdm import tqdm
-from reformer.reformer_pytorch import ViRWithArcMargin
-from utils.datasets import get_dataloaders, get_lpfw_dataloaders
 from torch.utils.tensorboard import SummaryWriter
+import argparse
 
-# Initialize TensorBoard
-writer = SummaryWriter("runs/vir_training")
+from utils.datasets import get_lpfw_dataloaders
+from utils.loss import FocalLoss
 
-# Create checkpoint directory
-checkpoint_dir = "runs/vir_training"
-os.makedirs(checkpoint_dir, exist_ok=True)
+def initialize_model(model_type, num_classes, device):
+    """Initialize the model based on the selected type."""
+    if model_type == "vir":
+        from reformer.reformer_pytorch import ViRWithArcMargin
+        model = ViRWithArcMargin(
+            image_size=224, 
+            patch_size=32, 
+            num_classes=num_classes, 
+            dim=256, 
+            depth=12, 
+            heads=8, 
+            arc_s=30.0, 
+            arc_m=0.50,
+            bucket_size=5
+        )
+    elif model_type == "vit":
+        from reformer.vit_pytorch import FaceTransformer  
+        model = FaceTransformer(
+            image_size=224,
+            patch_size=32,
+            num_classes=num_classes,
+            dim=256,
+            depth=12,
+            heads=8,
+            mlp_dim=512,
+            dropout=0.1,
+            emb_dropout=0.1
+        )
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+    
+    return model.to(device)
 
-# Device configuration
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print("Using device:", device)
 
-# Dataset 
-#data_dir = "path/to/your/dataset"  # Root directory containing 'train' and 'test' subfolders
-batch_size = 32
-#train_loader, test_loader = get_dataloaders(data_dir, batch_size=batch_size, num_workers=4)
-train_loader, test_loader = get_lpfw_dataloaders(batch_size)
+def train(args):
+    # Initialize TensorBoard
+    writer = SummaryWriter(args.tensorboard_dir)
 
-# Define model
-#num_classes = len(train_loader.dataset.dataset.classes)
-num_classes = len(train_loader.dataset.dataset.class_to_idx)
+    # Create checkpoint directory
+    checkpoint_dir = args.model_dir
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
+    # Device configuration
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print("Using device:", device)
 
-model = ViRWithArcMargin(
-    image_size=224, 
-    patch_size=16, 
-    num_classes=num_classes, 
-    dim=256, 
-    depth=12, 
-    heads=8, 
-    arc_s=30.0, 
-    arc_m=0.50
-).to(device)
+    # Dataset selection and configuration
+    train_loader, test_loader = get_lpfw_dataloaders(args.batch_size)
 
-# Loss and optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    # Initialize model
+    num_classes = len(train_loader.dataset.dataset.class_to_idx)
+    model = initialize_model(args.model_type, num_classes, device)
+
+    # Loss and optimizer
+    criterion = FocalLoss(gamma=2.0, alpha=None)  # Using Focal Loss
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+
+    # Training loop
+    num_epochs = args.epochs
+    best_accuracy = 0.0
+
+    for epoch in range(num_epochs):
+        print(f"Epoch {epoch + 1}/{num_epochs}")
+        train_accuracy = train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, device)
+        test_accuracy = evaluate(model, test_loader, criterion, epoch, writer, device)
+
+        # Save checkpoint if test accuracy improves
+        if test_accuracy > best_accuracy:
+            best_accuracy = test_accuracy
+            torch.save(model.state_dict(), os.path.join(checkpoint_dir, "best_model.pth"))
+            print(f"New best accuracy: {best_accuracy:.4f}. Model saved.")
+    
+    # Save final model after all epochs
+    final_model_path = os.path.join(checkpoint_dir, "final_model.pth")
+    torch.save(model.state_dict(), final_model_path)
+    print(f"Training completed. Final model saved to {final_model_path}")
+
+    # Close TensorBoard writer
+    writer.close()
 
 # Training and evaluation function
-def train_one_epoch(epoch):
+def train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, device):
     model.train()
     total_loss = 0.0
     all_labels = []
@@ -86,7 +129,7 @@ def train_one_epoch(epoch):
 
     return acc
 
-def evaluate(epoch):
+def evaluate(model, test_loader, criterion, epoch, writer, device):
     model.eval()
     total_loss = 0.0
     all_labels = []
@@ -119,20 +162,15 @@ def evaluate(epoch):
 
     return acc
 
-# Training loop
-num_epochs = 50
-best_accuracy = 0.0
 
-for epoch in range(num_epochs):
-    print(f"Epoch {epoch + 1}/{num_epochs}")
-    train_accuracy = train_one_epoch(epoch)
-    test_accuracy = evaluate(epoch)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train model with ArcMargin")
+    parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
+    parser.add_argument("--learning-rate", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
+    parser.add_argument("--tensorboard-dir", type=str, default="/opt/ml/output/tensorboard/", help="Directory for TensorBoard logs")
+    parser.add_argument("--model-dir", type=str, default="./models", help="Directory to save trained models")
+    parser.add_argument("--model-type", type=str, default="vir", choices=["vir", "vit"], help="Model type to train (vir or vit)")
 
-    # Save checkpoint if test accuracy improves
-    if test_accuracy > best_accuracy:
-        best_accuracy = test_accuracy
-        torch.save(model.state_dict(), os.path.join(checkpoint_dir, "best_model.pth"))
-        print(f"New best accuracy: {best_accuracy:.4f}. Model saved.")
-
-# Close TensorBoard writer
-writer.close()
+    args = parser.parse_args()
+    train(args)

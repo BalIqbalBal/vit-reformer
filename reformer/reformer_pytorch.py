@@ -743,7 +743,7 @@ class ArcMarginProduct(nn.Module):
         return logits
 
 class ViR(nn.Module):
-    def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, pool = 'cls', channels = 3, dim_head = 64, emb_dropout = 0.):
+    def __init__(self, *, image_size, patch_size, bucket_size, num_classes, dim, depth, heads, pool = 'cls', channels = 3, dim_head = 64, emb_dropout = 0.):
         super().__init__()
         image_height, image_width = pair(image_size)
         patch_height, patch_width = pair(patch_size)
@@ -765,7 +765,7 @@ class ViR(nn.Module):
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         self.dropout = nn.Dropout(emb_dropout)
 
-        self.transformer = Reformer(dim, depth, heads, dim_head)
+        self.transformer = Reformer(dim, depth, heads, dim_head, bucket_size=bucket_size)
 
         self.pool = pool
         self.to_latent = nn.Identity()
@@ -789,7 +789,7 @@ class ViR(nn.Module):
         return self.mlp_head(x)
 
 class ViRWithArcMargin(nn.Module):
-    def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, pool='cls', channels=3, dim_head=64, emb_dropout=0., arc_s=30.0, arc_m=0.50):
+    def __init__(self, *, image_size, patch_size, bucket_size, num_classes, dim, depth, heads, pool='cls', channels=3, dim_head=64, emb_dropout=0., arc_s=30.0, arc_m=0.50):
         super().__init__()
         image_height, image_width = pair(image_size)
         patch_height, patch_width = pair(patch_size)
@@ -811,7 +811,7 @@ class ViRWithArcMargin(nn.Module):
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         self.dropout = nn.Dropout(emb_dropout)
 
-        self.transformer = Reformer(dim, depth, heads, dim_head)
+        self.transformer = Reformer(dim, depth, heads, dim_head, bucket_size=bucket_size)
 
         self.pool = pool
         self.to_latent = nn.Identity()
