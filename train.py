@@ -1,6 +1,5 @@
 import os
 import torch
-import torch.nn as nn
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
