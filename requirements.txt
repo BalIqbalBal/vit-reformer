@@ -3,3 +3,4 @@ einops
 local-attention
 product-key-memory
 tensorboard
+timm

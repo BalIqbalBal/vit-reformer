@@ -26,15 +26,9 @@ def initialize_model(model_type, num_classes, device):
     elif model_type == "vit":
         from reformer.vit_pytorch import FaceTransformer  
         model = FaceTransformer(
-            image_size=224,
-            patch_size=32,
             num_classes=num_classes,
-            dim=256,
-            depth=12,
-            heads=8,
-            mlp_dim=512,
-            dropout=0.1,
-            emb_dropout=0.1
+            arc_s=30.0, 
+            arc_m=0.50
         )
     else:
         raise ValueError(f"Unsupported model type: {model_type}")

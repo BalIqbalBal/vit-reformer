@@ -27,7 +27,7 @@ class ArcMarginProduct(nn.Module):
 class FaceTransformer(nn.Module):
     def __init__(self, num_classes, arc_s=30.0, arc_m=0.50):
         super(FaceTransformer, self).__init__()
-        self.backbone = create_model('vit_base_patch16_224', pretrained=False)
+        self.backbone = create_model('vit_base_patch32_224', pretrained=False)
         self.backbone.head = nn.Identity()
         self.arcface = ArcMarginProduct(in_features=self.backbone.embed_dim, out_features=num_classes, s=arc_s, m=arc_m)
 
