@@ -3,7 +3,7 @@ from sagemaker.debugger import TensorBoardOutputConfig
 
 # Specify the SageMaker IAM role and output S3 path
 role = "arn:aws:iam::108830828338:role/SageMakerFullAccess"
-output_path = "s3://pain-identification-result/"
+output_path = "s3://dedireformer/"
 
 # Configure TensorBoard output
 tensorboard_output_config = TensorBoardOutputConfig(
@@ -23,9 +23,9 @@ estimator = PyTorch(
     tensorboard_output_config=tensorboard_output_config,  # TensorBoard configuration
     hyperparameters={
         "model-type": "vir",  # Required argument for train_launcher.py
-        "learning-rate": 0.0001,  # Matches '--learning-rate'
+        "learning-rate": 0.001,  # Matches '--learning-rate'
         "epochs": 100,  # Matches '--epochs'
-        "batch-size": 16,  # Matches '--batch-size'
+        "batch-size": 128,  # Matches '--batch-size'
         "tensorboard-dir": "/opt/ml/output/tensorboard/",  # Save TensorBoard logs
         "model-dir": "/opt/ml/model",  # Model directory
     },

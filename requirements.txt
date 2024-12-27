@@ -4,3 +4,4 @@ local-attention
 product-key-memory
 tensorboard
 timm
+vit-pytorch

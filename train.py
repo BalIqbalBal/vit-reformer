@@ -10,7 +10,7 @@ from utils.loss import FocalLoss
 
 def initialize_model(model_type, num_classes, device):
     """Initialize the model based on the selected type."""
-    if model_type == "vir":
+    if model_type == "virface":
         from reformer.reformer_pytorch import ViRWithArcMargin
         model = ViRWithArcMargin(
             image_size=224, 
@@ -23,7 +23,31 @@ def initialize_model(model_type, num_classes, device):
             arc_m=0.50,
             bucket_size=5
         )
+    elif model_type == "vir":
+        from reformer.reformer_pytorch import ViR
+        model = ViR(
+            image_size=224, 
+            patch_size=32, 
+            num_classes=num_classes, 
+            dim=256, 
+            depth=12, 
+            heads=8,
+            bucket_size=5 
+        )
     elif model_type == "vit":
+        from vit_pytorch import ViT
+        model = ViT(
+            image_size = 224,
+            patch_size = 32,
+            num_classes = num_classes,
+            dim = 256,
+            depth = 12,
+            heads = 8,
+            mlp_dim = 2048,
+            dropout = 0.1,
+            emb_dropout = 0.1
+        )
+    elif model_type == "vitface":
         from reformer.vit_pytorch import FaceTransformer  
         model = FaceTransformer(
             num_classes=num_classes,
@@ -94,7 +118,11 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, de
         images, labels = images.to(device), labels.to(device)
 
         optimizer.zero_grad()
-        logits = model(images, labels)  # Forward pass
+
+        try: 
+            logits = model(images, labels)
+        except:
+            logits = model(images)
         loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()
@@ -132,7 +160,11 @@ def evaluate(model, test_loader, criterion, epoch, writer, device):
         for images, labels in tqdm(test_loader, desc="Evaluating", leave=False):
             images, labels = images.to(device), labels.to(device)
 
-            logits = model(images, labels)
+            try: 
+                logits = model(images, labels)
+            except:
+                logits = model(images)
+
             loss = criterion(logits, labels)
             total_loss += loss.item()
 
@@ -163,7 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
     parser.add_argument("--tensorboard-dir", type=str, default="/opt/ml/output/tensorboard/", help="Directory for TensorBoard logs")
     parser.add_argument("--model-dir", type=str, default="./models", help="Directory to save trained models")
-    parser.add_argument("--model-type", type=str, default="vir", choices=["vir", "vit"], help="Model type to train (vir or vit)")
+    parser.add_argument("--model-type", type=str, default="vir", choices=["vir", "vit", "virface", "vitface"], help="Model type to train (vir or vit)")
 
     args = parser.parse_args()
     train(args)
