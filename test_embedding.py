@@ -1,34 +1,22 @@
 import os
-import cv2
 import torch
 import numpy as np
 import time
-from torch.nn import DataParallel
-import argparse
-from reformer.reformer_pytorch import ViRWithArcMargin
-from reformer.vit_pytorch import FaceTransformer
-from utils.datasets import get_lpfw_dataloaders
 import random
-
-
-def load_image(img_path):
-    image = cv2.imread(img_path, 0)  # Load image as grayscale
-    if image is None:
-        return None
-    image = np.dstack((image, np.fliplr(image)))  # Flip image horizontally for augmentation
-    image = image.transpose((2, 0, 1))  # Rearrange the shape to (C, H, W)
-    image = image[:, np.newaxis, :, :]  # Add an additional axis for single-channel
-    image = image.astype(np.float32, copy=False)
-    image -= 127.5  # Normalize to [-1, 1]
-    image /= 127.5
-    return image
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+from torch.utils.data import DataLoader
+from reformer.reformer_pytorch import ViRWithArcMargin
+from utils.datasets import get_lpfw_dataloaders
+import argparse
+from sklearn.preprocessing import LabelEncoder
 
 
 def get_features(model, test_loader, batch_size=10):
     features = []
     model.eval()
     with torch.no_grad():
-        for images in test_loader:
+        for images, label in test_loader:
             images = images.cuda()  # Move images to GPU
             output = model.extract_features(images)  # Get feature embeddings directly
             output = output.data.cpu().numpy()
@@ -53,10 +41,9 @@ def load_model(model, model_path):
 
 def get_feature_dict(test_loader, features):
     fe_dict = {}
-    for i, images in enumerate(test_loader):
-        img_paths = images[1]  # Assuming image paths are in the second element of the tuple
-        for j, path in enumerate(img_paths):
-            fe_dict[path] = features[i][j]
+    for i, (images, _) in enumerate(test_loader):
+        for j, image_tensor in enumerate(images):
+            fe_dict[f"image_{i}_{j}"] = features[i][j]  # Unique key for each image
     return fe_dict
 
 
@@ -118,22 +105,22 @@ def generate_pair_list(test_loader, num_pairs=6000):
 
     :param test_loader: DataLoader object containing the images and labels.
     :param num_pairs: Number of pairs to generate for testing.
-    :return: List of pairs, where each pair is a tuple (image1_path, image2_path, label).
+    :return: List of pairs, where each pair is a tuple (image1, image2, label).
     """
-    # Collect image paths and labels
-    image_paths = []
+    # Collect image tensors and labels from DataLoader
+    image_tensors = []
     labels = []
 
-    for images, img_paths in test_loader:
-        image_paths.extend(img_paths)
-        labels.extend(images)  # Assuming the first element is the label (identity)
+    for images, label in test_loader:
+        image_tensors.extend(images)
+        labels.extend(label)
 
-    # Group image paths by label
+    # Group image tensors by label
     label_to_images = {}
     for i, label in enumerate(labels):
         if label not in label_to_images:
             label_to_images[label] = []
-        label_to_images[label].append(image_paths[i])
+        label_to_images[label].append(image_tensors[i])
 
     # Create pairs (positive and negative)
     pairs = []
@@ -175,6 +162,38 @@ def save_pair_list(pair_list, file_path):
             f.write(f"{img1} {img2} {label}\n")
 
 
+def visualize_tsne(features, labels, filename='tsne_plot.png', max_samples=1000):
+    """
+    Visualize the feature embeddings using t-SNE and save it as an image file.
+
+    :param features: Feature embeddings to visualize.
+    :param labels: Corresponding labels for the features.
+    :param filename: The file name to save the figure.
+    :param max_samples: Maximum number of samples to visualize for large datasets.
+    """
+    # Optionally, downsample the data if it's too large to visualize
+    if len(features) > max_samples:
+        sample_indices = np.random.choice(len(features), max_samples, replace=False)
+        features = features[sample_indices]
+        labels = labels[sample_indices]
+
+    # Perform t-SNE
+    tsne = TSNE(n_components=2, random_state=42)
+    reduced_features = tsne.fit_transform(features)
+
+    # Encode labels into integers for coloring
+    le = LabelEncoder()
+    encoded_labels = le.fit_transform(labels)
+
+    # Create the t-SNE plot
+    plt.figure(figsize=(10, 8))
+    scatter = plt.scatter(reduced_features[:, 0], reduced_features[:, 1], c=encoded_labels, cmap='jet', s=50)
+    plt.colorbar(scatter, label='Class label')
+    plt.title('t-SNE Visualization of Face Embeddings')
+    plt.savefig(filename)
+    plt.close()
+
+
 def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Evaluate a face recognition model on LFW")
@@ -185,17 +204,22 @@ def main():
     args = parser.parse_args()
 
     # Initialize the ViRWithArcMargin model
-    model = ViRWithArcMargin(image_size=224, patch_size=16, bucket_size=32, num_classes=8631, dim=768, depth=12, heads=12, num_mem_kv=256)
+    model = ViRWithArcMargin(image_size=224, patch_size=32, bucket_size=5, num_classes=5749, dim=256, depth=12, heads=8, num_mem_kv=0)
     load_model(model, args.test_model_path)  # Load the pretrained model weights
     model.to(torch.device("cuda"))  # Move the model to GPU
 
-    test_loader = get_lpfw_dataloaders(batch_size=args.test_batch_size)  # Use the imported function here
+    _, test_loader = get_lpfw_dataloaders(batch_size=args.test_batch_size)  # Use the imported function here
 
     # Generate the pair list if it doesn't exist
     pair_list = generate_pair_list(test_loader)
     save_pair_list(pair_list, args.lfw_pair_list)  # Save the pair list to the file
 
     model.eval()  # Set the model to evaluation mode
+    features = get_features(model, test_loader, batch_size=args.test_batch_size)
+
+    # Visualize the features using t-SNE
+    visualize_tsne(features, np.zeros(features.shape[0]), 'hasil/tsne.jpg')  # Placeholder labels as we don't have label info here for visualization
+
     lfw_test(model, test_loader, args.lfw_pair_list, args.test_batch_size)
 
 

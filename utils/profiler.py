@@ -33,12 +33,14 @@ class ModelProfiler:
         batch_times = []
         batch_memories = []
         batch_sizes = []
+        batch_cpu_memories = []  # To track CPU memory usage during each batch
+        cpu_memories = []  # To track total CPU memory usage during the profiling
 
         # Clear initial memory state
         torch.cuda.empty_cache()
         gc.collect()
         initial_memory = torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
-        initial_ram = psutil.Process().memory_info().rss
+        initial_ram = psutil.Process().memory_info().rss  # Initial CPU memory usage
 
         self.model.eval()
         max_memory = 0
@@ -71,6 +73,12 @@ class ModelProfiler:
                 max_memory = max(max_memory, current_memory)
                 batch_memories.append(current_memory)
 
+                # Track CPU memory usage during the batch
+                batch_cpu_memories.append(psutil.Process().memory_info().rss / 1024**2)  # Convert to MB
+
+                # Track total CPU memory usage
+                cpu_memories.append(psutil.virtual_memory().used / 1024**2)  # Convert to MB
+
                 # Clear cache after each batch
                 torch.cuda.empty_cache()
 
@@ -102,7 +110,9 @@ class ModelProfiler:
                 'mean_batch_memory_mb': np.mean(batch_memories) / 1024**2,
                 'initial_ram_mb': initial_ram / 1024**2,
                 'final_ram_mb': final_ram / 1024**2,
-                'ram_difference_mb': (final_ram - initial_ram) / 1024**2
+                'ram_difference_mb': (final_ram - initial_ram) / 1024**2,
+                'mean_cpu_memory_mb': np.mean(batch_cpu_memories),  # Mean CPU memory during profiling
+                'mean_cpu_total_memory_mb': np.mean(cpu_memories),  # Mean total CPU memory during profiling
             },
             'layer_profiles': layer_profiles
         }
@@ -110,51 +120,51 @@ class ModelProfiler:
         return results
 
     def profile_layers(self, inputs: torch.Tensor) -> List[dict]:
-      """
-      Profile individual layers of the model using PyTorch Profiler.
+        """
+        Profile individual layers of the model using PyTorch Profiler.
 
-      Args:
-          inputs: Sample input tensor
+        Args:
+            inputs: Sample input tensor
 
-      Returns:
-          List of dictionaries containing layer-wise profiling information
-      """
-      activities = [ProfilerActivity.CPU]
-      if torch.cuda.is_available():
-          activities.append(ProfilerActivity.CUDA)
+        Returns:
+            List of dictionaries containing layer-wise profiling information
+        """
+        activities = [ProfilerActivity.CPU]
+        if torch.cuda.is_available():
+            activities.append(ProfilerActivity.CUDA)
 
-      layer_profiles = []
+        layer_profiles = []
 
-      with profile(activities=activities, record_shapes=True) as prof:
-          with record_function("model_forward"):
-              _ = self.model(inputs)
+        with profile(activities=activities, record_shapes=True) as prof:
+            with record_function("model_forward"):
+                _ = self.model(inputs)
 
-      # Process profiler output
-      for event in prof.key_averages():
-          if event.key != "model_forward":
-              layer_info = {
-                  'name': event.key,
-                  'cpu_time_total_ms': event.cpu_time_total / 1000000,  # Convert ns to ms
-                  'self_cpu_time_total_ms': event.self_cpu_time_total / 1000000,  # Convert ns to ms
-                  'cpu_memory_usage_mb': event.cpu_memory_usage / 1024**2 if hasattr(event, 'cpu_memory_usage') else 0,
-                  'self_cpu_memory_usage_mb': event.self_cpu_memory_usage / 1024**2 if hasattr(event, 'self_cpu_memory_usage') else 0,
-                  'input_shapes': event.input_shapes,
-              }
+        # Process profiler output
+        for event in prof.key_averages():
+            if event.key != "model_forward":
+                layer_info = {
+                    'name': event.key,
+                    'cpu_time_total_ms': event.cpu_time_total / 1000000,  # Convert ns to ms
+                    'self_cpu_time_total_ms': event.self_cpu_time_total / 1000000,  # Convert ns to ms
+                    'cpu_memory_usage_mb': event.cpu_memory_usage / 1024**2 if hasattr(event, 'cpu_memory_usage') else 0,
+                    'self_cpu_memory_usage_mb': event.self_cpu_memory_usage / 1024**2 if hasattr(event, 'self_cpu_memory_usage') else 0,
+                    'input_shapes': event.input_shapes,
+                }
 
-              # Add device (CUDA) metrics if available
-              if hasattr(event, 'device_time_total'):
-                  layer_info['device_time_total_ms'] = event.device_time_total / 1000000
-              if hasattr(event, 'self_device_time_total'):
-                  layer_info['self_device_time_total_ms'] = event.self_device_time_total / 1000000
-              if hasattr(event, 'device_memory_usage'):
-                  layer_info['device_memory_usage_mb'] = event.device_memory_usage / 1024**2
-              if hasattr(event, 'self_device_memory_usage'):
-                  layer_info['self_device_memory_usage_mb'] = event.self_device_memory_usage / 1024**2
+                # Add device (CUDA) metrics if available
+                if hasattr(event, 'device_time_total'):
+                    layer_info['device_time_total_ms'] = event.device_time_total / 1000000
+                if hasattr(event, 'self_device_time_total'):
+                    layer_info['self_device_time_total_ms'] = event.self_device_time_total / 1000000
+                if hasattr(event, 'device_memory_usage'):
+                    layer_info['device_memory_usage_mb'] = event.device_memory_usage / 1024**2
+                if hasattr(event, 'self_device_memory_usage'):
+                    layer_info['self_device_memory_usage_mb'] = event.self_device_memory_usage / 1024**2
 
-              layer_profiles.append(layer_info)
+                layer_profiles.append(layer_info)
 
-      return layer_profiles
-    
+        return layer_profiles
+
     def profile_single_step_with_range(
         self,
         inputs: torch.Tensor,

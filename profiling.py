@@ -10,10 +10,15 @@ from utils.profiler import ModelProfiler
 # Create results directory if it doesn't exist
 os.makedirs('hasil/profiling_results', exist_ok=True)
 
-# Initialize CSV files with headers
-csv_headers = ["Model", "Batch Size", "Patch Size", "Mean Batch Time (ms)", 
-               "Standard Deviation (ms)", "Throughput (samples/second)", 
-               "Peak GPU Memory (MB)", "Mean Batch Memory (MB)"]
+# Updated CSV headers to include CPU metrics
+csv_headers = [
+    "Model", "Batch Size", "Patch Size", 
+    "Mean Batch Time (ms)", "Standard Deviation (ms)", 
+    "Throughput (samples/second)", 
+    "Peak GPU Memory (MB)", "Mean Batch Memory (MB)",
+    "Mean CPU Memory (MB)", "Peak CPU Memory (MB)",
+    "CPU Memory Change (MB)", "Mean Total CPU Memory (MB)"
+]
 
 with open('hasil/profiling_results/performance_metrics.csv', 'w', newline='') as f:
     writer = csv.writer(f)
@@ -21,22 +26,38 @@ with open('hasil/profiling_results/performance_metrics.csv', 'w', newline='') as
 
 # Define parameter ranges
 batch_sizes = range(1, 8)
-patch_sizes = [4, 8, 16, 32]  # Common patch sizes for vision transformers
+patch_sizes = [4, 8, 16, 32]
 
 def create_models(patch_size, num_classes):
-    """Create both models with given patch size."""
-    model_reformer = ViR(
-        image_size=224,
-        patch_size=patch_size,
-        num_classes=2,
-        dim=100,
-        depth=12,
-        heads=9,
-        bucket_size=2,
-        emb_dropout=0.1,
-        num_mem_kv=3,
-        n_hashes=1
-    )
+    """Create both models with given patch size and move them to the device."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    try: 
+        model_reformer = ViR(
+            image_size=224,
+            patch_size=patch_size,
+            num_classes=2,
+            dim=100,
+            depth=12,
+            heads=9,
+            bucket_size=2,
+            emb_dropout=0.1,
+            num_mem_kv=3,
+            n_hashes=1
+        )
+    except:
+        model_reformer = ViR(
+            image_size=224,
+            patch_size=patch_size,
+            num_classes=2,
+            dim=100,
+            depth=12,
+            heads=9,
+            bucket_size=5,
+            emb_dropout=0.1,
+            num_mem_kv=0,
+            n_hashes=1
+        )
 
     model_vit = ViT(
         image_size=224,
@@ -49,12 +70,14 @@ def create_models(patch_size, num_classes):
         dropout=0.1,
         emb_dropout=0.1
     )
-    
+
+    model_reformer.to(device)
+    model_vit.to(device)
     return model_reformer, model_vit
 
 def save_results(model_name, batch_size, patch_size, results):
     """Save profiling results to CSV."""
-    with open('profiling_results/performance_metrics.csv', 'a', newline='') as f:
+    with open('hasil/profiling_results/performance_metrics.csv', 'a', newline='') as f:
         writer = csv.writer(f)
         writer.writerow([
             model_name,
@@ -64,13 +87,26 @@ def save_results(model_name, batch_size, patch_size, results):
             results['timing_statistics']['std_batch_time_ms'],
             results['timing_statistics']['samples_per_second'],
             results['memory_statistics']['peak_gpu_memory_mb'],
-            results['memory_statistics']['mean_batch_memory_mb']
+            results['memory_statistics']['mean_batch_memory_mb'],
+            results['memory_statistics']['mean_cpu_memory_mb'],
+            max(results['memory_statistics']['mean_cpu_memory_mb'], 
+                results['memory_statistics']['final_ram_mb']),
+            results['memory_statistics']['ram_difference_mb'],
+            results['memory_statistics']['mean_cpu_total_memory_mb']
         ])
 
-# Lists to store results for plotting
+# Updated plot data structure to include CPU metrics
 plot_data = {
-    'reformer': {'batch_times': [], 'throughput': [], 'memory': []},
-    'vit': {'batch_times': [], 'throughput': [], 'memory': []}
+    'reformer': {
+        'batch_times': [], 'throughput': [], 
+        'gpu_memory': [], 'cpu_memory': [], 
+        'total_cpu_memory': []
+    },
+    'vit': {
+        'batch_times': [], 'throughput': [], 
+        'gpu_memory': [], 'cpu_memory': [], 
+        'total_cpu_memory': []
+    }
 }
 
 # Main profiling loop
@@ -80,25 +116,18 @@ for patch_size in patch_sizes:
     for batch_size in batch_sizes:
         print(f"Processing batch size: {batch_size}")
         
-        # Get dataloaders
         train_loader, test_loader = get_lpfw_dataloaders(batch_size)
         num_classes = len(train_loader.dataset.dataset.class_to_idx)
         
-        # Create models with current patch size
         model_reformer, model_vit = create_models(patch_size, num_classes)
         
-        # Profile Reformer
-        profiler_reformer = ModelProfiler(model_reformer)
-        results_reformer = profiler_reformer.profile_with_loader(train_loader, num_batches=1)
-        save_results('Reformer', batch_size, patch_size, results_reformer)
-        
-        # Profile ViT
-        profiler_vit = ModelProfiler(model_vit)
-        results_vit = profiler_vit.profile_with_loader(train_loader, num_batches=1)
-        save_results('ViT', batch_size, patch_size, results_vit)
-        
-        # Store results for plotting
-        for model_name, results in [('reformer', results_reformer), ('vit', results_vit)]:
+        # Profile both models
+        for model_name, model in [('reformer', model_reformer), ('vit', model_vit)]:
+            profiler = ModelProfiler(model)
+            results = profiler.profile_with_loader(train_loader, num_batches=1)
+            save_results(model_name.capitalize(), batch_size, patch_size, results)
+            
+            # Store results for plotting
             plot_data[model_name]['batch_times'].append({
                 'patch_size': patch_size,
                 'batch_size': batch_size,
@@ -109,17 +138,27 @@ for patch_size in patch_sizes:
                 'batch_size': batch_size,
                 'value': results['timing_statistics']['samples_per_second']
             })
-            plot_data[model_name]['memory'].append({
+            plot_data[model_name]['gpu_memory'].append({
                 'patch_size': patch_size,
                 'batch_size': batch_size,
                 'value': results['memory_statistics']['peak_gpu_memory_mb']
             })
+            plot_data[model_name]['cpu_memory'].append({
+                'patch_size': patch_size,
+                'batch_size': batch_size,
+                'value': results['memory_statistics']['mean_cpu_memory_mb']
+            })
+            plot_data[model_name]['total_cpu_memory'].append({
+                'patch_size': patch_size,
+                'batch_size': batch_size,
+                'value': results['memory_statistics']['mean_cpu_total_memory_mb']
+            })
 
-# Create plots
-fig, axs = plt.subplots(3, len(patch_sizes), figsize=(20, 15))
-metrics = ['batch_times', 'throughput', 'memory']
-titles = ['Batch Time', 'Throughput', 'Memory Usage']
-ylabels = ['Time (ms)', 'Samples/Second', 'Memory (MB)']
+# Create plots with CPU metrics
+fig, axs = plt.subplots(5, len(patch_sizes), figsize=(20, 25))
+metrics = ['batch_times', 'throughput', 'gpu_memory', 'cpu_memory', 'total_cpu_memory']
+titles = ['Batch Time', 'Throughput', 'GPU Memory Usage', 'CPU Memory Usage', 'Total CPU Memory Usage']
+ylabels = ['Time (ms)', 'Samples/Second', 'GPU Memory (MB)', 'CPU Memory (MB)', 'Total CPU Memory (MB)']
 
 for i, metric in enumerate(metrics):
     for j, patch_size in enumerate(patch_sizes):
@@ -131,18 +170,21 @@ for i, metric in enumerate(metrics):
         axs[i, j].plot(
             [x['batch_size'] for x in reformer_data],
             [x['value'] for x in reformer_data],
-            label='Reformer'
+            label='Reformer',
+            marker='o'
         )
         axs[i, j].plot(
             [x['batch_size'] for x in vit_data],
             [x['value'] for x in vit_data],
-            label='ViT'
+            label='ViT',
+            marker='s'
         )
         
         axs[i, j].set_title(f'{titles[i]} (Patch Size {patch_size})')
         axs[i, j].set_xlabel('Batch Size')
         axs[i, j].set_ylabel(ylabels[i])
         axs[i, j].legend()
+        axs[i, j].grid(True)
 
 plt.tight_layout()
 plt.savefig('hasil/profiling_results/performance_comparison.png')
