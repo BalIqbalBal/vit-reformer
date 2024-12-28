@@ -833,8 +833,28 @@ class ViRWithArcMargin(nn.Module):
         x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
 
         x = self.to_latent(x)
-        logits = self.arc_margin(x, labels)  # Use ArcMarginProduct
-        return logits
+        if labels is not None:
+            logits = self.arc_margin(x, labels)  # Use ArcMarginProduct
+            return logits
+        return x
+    
+    def extract_features(self, img):
+        """
+        Extract normalized feature embeddings for visualization.
+        """
+        x = self.to_patch_embedding(img)
+        b, n, _ = x.shape
+
+        cls_tokens = repeat(self.cls_token, '1 1 d -> b 1 d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding[:, :(n + 1)]
+        x = self.dropout(x)
+
+        x = self.transformer(x)
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
+
+        x = self.to_latent(x)
+        return F.normalize(x, dim=1)
 
 # =================================================================================================================================
 

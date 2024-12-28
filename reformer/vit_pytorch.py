@@ -33,11 +33,14 @@ class FaceTransformer(nn.Module):
 
     def forward(self, x, labels):
         features = self.backbone(x)
-        logits = self.arcface(features, labels)
-        return logits
+        if labels is not None:
+            logits = self.arcface(features, labels)
+            return logits
+        return features
+        
 
     def extract_features(self, x):
         """
         Extract normalized feature embeddings for visualization.
         """
-        return F.normalize(self.backbone(x), dim=1)
+        return self.backbone(x)
