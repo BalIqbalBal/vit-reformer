@@ -208,7 +208,7 @@ def main():
     load_model(model, args.test_model_path)  # Load the pretrained model weights
     model.to(torch.device("cuda"))  # Move the model to GPU
 
-    _, test_loader = get_lpfw_dataloaders(batch_size=args.test_batch_size)  # Use the imported function here
+    train_loader, _ = get_lpfw_dataloaders(batch_size=args.test_batch_size)  # Use the imported function here
 
     # Generate the pair list if it doesn't exist
     pair_list = generate_pair_list(test_loader)
