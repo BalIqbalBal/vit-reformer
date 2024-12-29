@@ -6,6 +6,8 @@ import random
 import matplotlib.pyplot as plt
 from PIL import Image
 import argparse
+from itertools import permutations
+
 
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
@@ -191,28 +193,38 @@ def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=6000):
     pairs = []
 
     # Generate positive pairs
+    positive_pairs = []
     for label, image_paths in label_to_images.items():
         if len(image_paths) < 2:
             continue
         for i in range(len(image_paths)):
             for j in range(i + 1, len(image_paths)):
-                pairs.append((image_paths[i], image_paths[j], 1))
+                positive_pairs.append((image_paths[i], image_paths[j], 1))
+
+    # Limit the number of positive pairs to match num_pairs
+    num_positive_pairs = min(len(positive_pairs), num_pairs // 2)  # Balance between positive and negative pairs
+    pairs.extend(positive_pairs[:num_positive_pairs])
 
     # Generate negative pairs
     labels = list(label_to_images.keys())
+    negative_label_combinations = list(permutations(labels, 2))
+    random.shuffle(negative_label_combinations)
+
+    # Add negative pairs to reach num_pairs
     while len(pairs) < num_pairs:
-        label1 = random.choice(labels)
-        label2 = random.choice(labels)
-        if label1 == label2:
-            continue
-        img1 = random.choice(label_to_images[label1])
-        img2 = random.choice(label_to_images[label2])
-        pairs.append((img1, img2, 0))
+        for label1, label2 in negative_label_combinations:
+            if len(pairs) >= num_pairs:
+                break
+            img1 = random.choice(label_to_images[label1])
+            img2 = random.choice(label_to_images[label2])
+            pairs.append((img1, img2, 0))
 
     # Save pairs to file
     with open(pair_file, 'w') as f:
         for img1, img2, label in pairs:
             f.write(f"{img1} {img2} {label}\n")
+
+    print(f"Generated {len(pairs)} pairs, saved to {pair_file}")
 
 def visualize_with_tsne(features, save_path=None):
     """
