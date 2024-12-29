@@ -5,13 +5,14 @@ import time
 import random
 import matplotlib.pyplot as plt
 from PIL import Image
-from sklearn.manifold import TSNE
-from sklearn.preprocessing import LabelEncoder
 import argparse
 
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from reformer.reformer_pytorch import ViRWithArcMargin
+
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
 
 # Define the transformations for the dataset
 test_transform = transforms.Compose([
@@ -20,22 +21,74 @@ test_transform = transforms.Compose([
     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 ])
 
-def get_features_from_images(model, image_paths):
-    features = []
+def save_features(features, save_path):
+    """
+    Save extracted features to a file.
+    
+    Args:
+        features (dict): Dictionary mapping file paths to feature vectors
+        save_path (str): Path where features will be saved
+    """
+    # Convert features dictionary to a format suitable for saving
+    paths = list(features.keys())
+    feature_vectors = np.array([features[path] for path in paths])
+    
+    # Save both the feature vectors and the corresponding paths
+    np.savez(save_path,
+             features=feature_vectors,
+             paths=paths)
+    print(f"Features saved to {save_path}")
+
+def load_features(load_path):
+    """
+    Load features from a saved file.
+    
+    Args:
+        load_path (str): Path to the saved features file
+    
+    Returns:
+        dict: Dictionary mapping file paths to feature vectors
+    """
+    data = np.load(load_path, allow_pickle=True)
+    features = {}
+    for path, feature_vector in zip(data['paths'], data['features']):
+        features[str(path)] = feature_vector
+    return features
+
+def get_features_from_images(model, image_paths, save_path=None):
+    """
+    Extract features from images and return them in a dictionary.
+    
+    Args:
+        model: The neural network model
+        image_paths (list): List of image file paths
+        save_path (str, optional): If provided, save features to this path
+    
+    Returns:
+        dict: Dictionary mapping file paths to feature vectors
+    """
+    features = {}
     model.eval()
     with torch.no_grad():
         for image_path in image_paths:
             image = Image.open(image_path).convert('RGB')
-            image = test_transform(image).unsqueeze(0).cuda()  # Transform and move to GPU
-            output = model.extract_features(image)  # Get feature embeddings directly
+            image = test_transform(image).unsqueeze(0).cuda()
+            output = model.extract_features(image)
             output = output.data.cpu().numpy()
-            features.append(output[0])
+            features[image_path] = output[0]
 
-    return np.array(features)  # Return as a numpy array
+    if save_path:
+        save_features(features, save_path)
+
+    return features
 
 def load_model(model, model_path):
     """
     Load pretrained model weights.
+    
+    Args:
+        model: The neural network model
+        model_path (str): Path to the pretrained weights file
     """
     print(f"Loading model from {model_path}")
     pretrained_dict = torch.load(model_path)
@@ -47,9 +100,29 @@ def load_model(model, model_path):
     model.load_state_dict(model_dict)
 
 def cosine_metric(x1, x2):
+    """
+    Calculate cosine similarity between two vectors.
+    
+    Args:
+        x1 (numpy.ndarray): First vector
+        x2 (numpy.ndarray): Second vector
+    
+    Returns:
+        float: Cosine similarity score
+    """
     return np.dot(x1, x2) / (np.linalg.norm(x1) * np.linalg.norm(x2))
 
 def cal_accuracy(y_score, y_true):
+    """
+    Calculate accuracy and find the best threshold.
+    
+    Args:
+        y_score (list): List of similarity scores
+        y_true (list): List of true labels
+    
+    Returns:
+        tuple: (best_accuracy, best_threshold)
+    """
     y_score = np.asarray(y_score)
     y_true = np.asarray(y_true)
     best_acc = 0
@@ -65,16 +138,28 @@ def cal_accuracy(y_score, y_true):
     return (best_acc, best_th)
 
 def test_performance(features, pair_list):
+    """
+    Test performance using cosine similarity between pairs of features.
+    
+    Args:
+        features (dict): Dictionary mapping file paths to their feature vectors
+        pair_list (str): Path to the file containing pairs to test
+    
+    Returns:
+        tuple: (accuracy, threshold)
+    """
     with open(pair_list, 'r') as fd:
         pairs = fd.readlines()
 
     sims = []
     labels = []
     for pair in pairs:
-        splits = pair.split()
-        idx1, idx2, label = int(splits[0]), int(splits[1]), int(splits[2])
-        fe_1 = features[idx1]
-        fe_2 = features[idx2]
+        splits = pair.strip().split()
+        path1, path2, label = splits[0], splits[1], int(splits[2])
+        
+        # Get features using file paths as keys
+        fe_1 = features[path1]
+        fe_2 = features[path2]
         sim = cosine_metric(fe_1, fe_2)
 
         sims.append(sim)
@@ -83,23 +168,14 @@ def test_performance(features, pair_list):
     acc, th = cal_accuracy(sims, labels)
     return acc, th
 
-def lfw_test(model, image_paths, pair_list):
-    s = time.time()
-    features = get_features_from_images(model, image_paths)
-    print(features.shape)
-    t = time.time() - s
-    print('Total time is {}, average time is {}'.format(t, t / len(image_paths)))
-    acc, th = test_performance(features, pair_list)
-    print('LFW face verification accuracy: ', acc, 'threshold: ', th)
-    return acc
-
 def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=6000):
     """
     Generate a pair list for LFW testing.
 
-    :param dataset_root: Root directory of the LFW dataset.
-    :param pair_file: File to save the generated pair list.
-    :param num_pairs: Number of pairs to generate.
+    Args:
+        dataset_root (str): Root directory of the LFW dataset
+        pair_file (str): File to save the generated pair list
+        num_pairs (int): Number of pairs to generate
     """
     label_to_images = {}
 
@@ -138,21 +214,152 @@ def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=6000):
         for img1, img2, label in pairs:
             f.write(f"{img1} {img2} {label}\n")
 
+def visualize_with_tsne(features, save_path=None):
+    """
+    Visualizes the feature embeddings using t-SNE with colors and labels based on person names.
+
+    Args:
+        features (dict): A dictionary mapping image paths to feature vectors
+        save_path (str or None): If provided, saves the plot to this path. If None, the plot is shown
+    """
+    # Convert features dictionary to a list of feature vectors
+    feature_vectors = list(features.values())
+    file_paths = list(features.keys())
+    
+    # Extract person names from file paths
+    person_names = []
+    for path in file_paths:
+        # Split path and get the directory name which is the person's name
+        parts = path.split(os.sep)
+        # Find the person name in the path (it's usually between lfw_funneled and the image name)
+        for i, part in enumerate(parts):
+            if part == "lfw_funneled" and i + 1 < len(parts):
+                person_names.append(parts[i + 1])
+                break
+        else:
+            # If lfw_funneled is not found, take the second to last component
+            person_names.append(parts[-2])
+
+    # Convert feature vectors to a NumPy array
+    feature_vectors = np.array(feature_vectors)
+
+    # Apply t-SNE to reduce dimensionality to 2D
+    print("Applying t-SNE dimensionality reduction...")
+    tsne = TSNE(n_components=2, random_state=42)
+    reduced_features = tsne.fit_transform(feature_vectors)
+
+    # Get unique names and assign colors
+    unique_names = list(set(person_names))
+    num_colors = len(unique_names)
+    colors = plt.cm.rainbow(np.linspace(0, 1, num_colors))
+    name_to_color = dict(zip(unique_names, colors))
+
+    # Create color array for scatter plot
+    point_colors = [name_to_color[name] for name in person_names]
+
+    # Create the plot
+    plt.figure(figsize=(15, 10))
+    
+    # Plot points
+    scatter = plt.scatter(reduced_features[:, 0], reduced_features[:, 1], 
+                         c=point_colors, 
+                         s=50,
+                         alpha=0.6)
+
+    # Add title and labels
+    plt.title("t-SNE Visualization of Face Feature Embeddings")
+    plt.xlabel("t-SNE component 1")
+    plt.ylabel("t-SNE component 2")
+
+    # Create legend for unique persons
+    # To avoid too many labels, limit to top 20 persons with most images
+    name_counts = {}
+    for name in person_names:
+        name_counts[name] = name_counts.get(name, 0) + 1
+    
+    # Sort by count and take top 20
+    top_names = sorted(name_counts.items(), key=lambda x: x[1], reverse=True)[:20]
+    top_names = [name for name, _ in top_names]
+    
+    # Create legend handles for top names
+    legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
+                                markerfacecolor=name_to_color[name], 
+                                label=name, markersize=10)
+                      for name in top_names]
+    
+    # Add legend
+    plt.legend(handles=legend_elements, 
+              title="Top 20 People",
+              bbox_to_anchor=(1.05, 1),
+              loc='upper left',
+              borderaxespad=0.)
+
+    # Adjust layout to prevent legend cutoff
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+    
+    plt.close(
+
+def lfw_test_with_features(model, image_paths, pair_list, feature_save_path=None, tsne_save_path=None):
+    """
+    Perform LFW test and optionally save features and t-SNE visualization.
+    
+    Args:
+        model: The neural network model
+        image_paths (list): List of image paths to process
+        pair_list (str): Path to the file containing pairs to test
+        feature_save_path (str, optional): Path to save extracted features
+        tsne_save_path (str, optional): Path to save t-SNE visualization
+    
+    Returns:
+        float: Accuracy score
+    """
+    s = time.time()
+    features = get_features_from_images(model, image_paths, feature_save_path)
+    print(f"Features extracted for {len(features)} images")
+    t = time.time() - s
+    print('Total time is {}, average time is {}'.format(t, t / len(image_paths)))
+
+    if tsne_save_path:
+        visualize_with_tsne(features, tsne_save_path)
+
+    acc, th = test_performance(features, pair_list)
+    print('LFW face verification accuracy: ', acc, 'threshold: ', th)
+    return acc
+
 def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Evaluate a face recognition model on LFW")
     parser.add_argument('--test_model_path', type=str, required=True, help="Path to the pretrained model (.pth file)")
     parser.add_argument('--dataset_root', type=str, required=True, help="Root directory for the LFW dataset")
     parser.add_argument('--pair_file', type=str, required=True, help="File to save the generated pair list")
+    parser.add_argument('--tsne_save_path', type=str, required=True, help="File to save tsne_plot")
+    parser.add_argument('--feature_save_path', type=str, help="Path to save extracted features")
 
     args = parser.parse_args()
 
-    # Initialize the ViRWithArcMargin model
-    model = ViRWithArcMargin(image_size=224, patch_size=32, bucket_size=5, num_classes=5749, dim=256, depth=12, heads=8, num_mem_kv=0)
-    load_model(model, args.test_model_path)  # Load the pretrained model weights
-    model.to(torch.device("cuda"))  # Move the model to GPU
+    # Initialize model
+    model = ViRWithArcMargin(
+        image_size=224,
+        patch_size=32,
+        bucket_size=5,
+        num_classes=5749,
+        dim=256,
+        depth=12,
+        heads=8,
+        num_mem_kv=0
+    )
+    
+    # Load pretrained weights and move model to GPU
+    load_model(model, args.test_model_path)
+    model.to(torch.device("cuda"))
 
-    # Generate the pair list
+    # Generate pair list for testing
     generate_lfw_pair_list(args.dataset_root, args.pair_file)
 
     # Collect all image paths
@@ -163,7 +370,13 @@ def main():
                 image_paths.append(os.path.join(root, file))
 
     # Perform LFW test
-    lfw_test(model, image_paths, args.pair_file)
+    lfw_test_with_features(
+        model,
+        image_paths,
+        args.pair_file,
+        args.feature_save_path,
+        args.tsne_save_path
+    )
 
 if __name__ == '__main__':
     main()

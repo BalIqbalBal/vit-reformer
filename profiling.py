@@ -6,6 +6,7 @@ import csv
 from utils.datasets import get_lpfw_dataloaders
 import os
 from utils.profiler import ModelProfiler
+import torch 
 
 # Create results directory if it doesn't exist
 os.makedirs('hasil/profiling_results', exist_ok=True)
@@ -31,6 +32,7 @@ patch_sizes = [4, 8, 16, 32]
 def create_models(patch_size, num_classes):
     """Create both models with given patch size and move them to the device."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
 
     try: 
         model_reformer = ViR(
