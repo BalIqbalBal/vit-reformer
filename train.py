@@ -19,7 +19,7 @@ def initialize_model(model_type, num_classes, device):
             dim=256, 
             depth=12, 
             heads=8, 
-            arc_s=30.0, 
+            arc_s=64.0, 
             arc_m=0.50,
             n_hashes=2,
             bucket_size=5

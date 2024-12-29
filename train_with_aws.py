@@ -22,7 +22,7 @@ estimator = PyTorch(
     output_path=output_path,  # S3 path for output artifacts
     tensorboard_output_config=tensorboard_output_config,  # TensorBoard configuration
     hyperparameters={
-        "model-type": "vir",  # Required argument for train_launcher.py
+        "model-type": "virface",  # Required argument for train_launcher.py
         "learning-rate": 0.001,  # Matches '--learning-rate'
         "epochs": 100,  # Matches '--epochs'
         "batch-size": 128,  # Matches '--batch-size'

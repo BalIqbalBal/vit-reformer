@@ -303,7 +303,117 @@ def visualize_with_tsne(features, save_path=None):
     else:
         plt.show()
     
-    plt.close(
+    plt.close()
+
+def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
+    """
+    Enhanced UMAP visualization with better person selection and filtering for high-dimensional features.
+
+    Args:
+        features (dict): A dictionary mapping image paths to feature vectors
+        num_people (int): Number of random people to select for visualization
+        random_seed (int): Random seed for reproducibility
+        save_path (str or None): If provided, saves the plot to this path. If None, the plot is shown
+    """
+    np.random.seed(random_seed)
+    
+    # Extract and process names
+    file_paths = list(features.keys())
+    person_names = []
+    for path in file_paths:
+        parts = path.split(os.sep)
+        for i, part in enumerate(parts):
+            if part == "lfw_funneled" and i + 1 < len(parts):
+                person_names.append(parts[i + 1])
+                break
+        else:
+            person_names.append(parts[-2])
+
+    # Get unique names and their counts
+    name_counts = {}
+    for name in person_names:
+        name_counts[name] = name_counts.get(name, 0) + 1
+    
+    # Filter to include only people with multiple images
+    min_images = 3  # Minimum number of images per person
+    qualified_names = [name for name, count in name_counts.items() if count >= min_images]
+    
+    if len(qualified_names) < num_people:
+        print(f"Warning: Only {len(qualified_names)} people have {min_images}+ images. Using all of them.")
+        selected_names = qualified_names
+    else:
+        selected_names = np.random.choice(qualified_names, size=num_people, replace=False)
+    
+    # Filter features
+    filtered_features = []
+    filtered_names = []
+    for path, feature in features.items():
+        person_name = None
+        parts = path.split(os.sep)
+        for i, part in enumerate(parts):
+            if part == "lfw_funneled" and i + 1 < len(parts):
+                person_name = parts[i + 1]
+                break
+        else:
+            person_name = parts[-2]
+            
+        if person_name in selected_names:
+            filtered_features.append(feature)
+            filtered_names.append(person_name)
+
+    # Convert to numpy array and normalize
+    feature_vectors = np.array(filtered_features)
+    
+    # Normalize features (important for dimensionality reduction)
+    feature_vectors = feature_vectors / np.linalg.norm(feature_vectors, axis=1, keepdims=True)
+    
+    print("Applying UMAP dimensionality reduction...")
+    reducer = umap.UMAP(n_components=2, random_state=42)
+    reduced_features = reducer.fit_transform(feature_vectors)
+
+    # Plotting
+    plt.figure(figsize=(15, 10))
+    
+    # Create color scheme
+    unique_filtered_names = list(set(filtered_names))
+    num_colors = len(unique_filtered_names)
+    colors = plt.cm.rainbow(np.linspace(0, 1, num_colors))
+    name_to_color = dict(zip(unique_filtered_names, colors))
+    point_colors = [name_to_color[name] for name in filtered_names]
+    
+    # Create scatter plot
+    scatter = plt.scatter(reduced_features[:, 0], reduced_features[:, 1], 
+                         c=point_colors, 
+                         s=100,  # Larger points for better visibility
+                         alpha=0.7)  # Increased opacity
+
+    plt.title(f"UMAP Visualization of Face Feature Embeddings\n({len(selected_names)} People)")
+    plt.xlabel("UMAP component 1")
+    plt.ylabel("UMAP component 2")
+
+    # Sort by count and create legend
+    selected_names_sorted = sorted(selected_names, key=lambda x: name_counts[x], reverse=True)
+    legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
+                                markerfacecolor=name_to_color[name], 
+                                label=f"{name} ({name_counts[name]} images)", 
+                                markersize=10)
+                      for name in selected_names_sorted]
+    
+    plt.legend(handles=legend_elements, 
+              title="People (Image Count)",
+              bbox_to_anchor=(1.05, 1),
+              loc='upper left',
+              borderaxespad=0.)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+    
+    plt.close()
 
 def lfw_test_with_features(model, image_paths, pair_list, feature_save_path=None, tsne_save_path=None):
     """
