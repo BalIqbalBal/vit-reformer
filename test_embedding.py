@@ -7,14 +7,18 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import argparse
 from itertools import permutations
-
+from sklearn.neighbors import NearestNeighbors
 
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from reformer.reformer_pytorch import ViRWithArcMargin
 
 from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+import umap
+from scipy.spatial import ConvexHull
+from matplotlib.colors import ListedColormap
+
 
 # Define the transformations for the dataset
 test_transform = transforms.Compose([
@@ -31,14 +35,9 @@ def save_features(features, save_path):
         features (dict): Dictionary mapping file paths to feature vectors
         save_path (str): Path where features will be saved
     """
-    # Convert features dictionary to a format suitable for saving
     paths = list(features.keys())
     feature_vectors = np.array([features[path] for path in paths])
-    
-    # Save both the feature vectors and the corresponding paths
-    np.savez(save_path,
-             features=feature_vectors,
-             paths=paths)
+    np.savez(save_path, features=feature_vectors, paths=paths)
     print(f"Features saved to {save_path}")
 
 def load_features(load_path):
@@ -57,22 +56,47 @@ def load_features(load_path):
         features[str(path)] = feature_vector
     return features
 
-def get_features_from_images(model, image_paths, save_path=None):
+def get_unique_paths_from_pairs(pair_list):
     """
-    Extract features from images and return them in a dictionary.
+    Extract unique image paths from the pair list file.
+    
+    Args:
+        pair_list (str): Path to the file containing image pairs
+        
+    Returns:
+        set: Set of unique image paths
+    """
+    unique_paths = set()
+    with open(pair_list, 'r') as fd:
+        pairs = fd.readlines()
+    for pair in pairs:
+        splits = pair.strip().split()
+        path1, path2 = splits[0], splits[1]
+        unique_paths.add(path1)
+        unique_paths.add(path2)
+    return unique_paths
+
+def get_features_from_images(model, pair_list, save_path=None):
+    """
+    Extract features from images listed in the pair file and return them in a dictionary.
     
     Args:
         model: The neural network model
-        image_paths (list): List of image file paths
+        pair_list (str): Path to the file containing image pairs
         save_path (str, optional): If provided, save features to this path
     
     Returns:
         dict: Dictionary mapping file paths to feature vectors
     """
+    image_paths = get_unique_paths_from_pairs(pair_list)
+    print(f"Processing {len(image_paths)} unique images from pair list")
+    
     features = {}
     model.eval()
     with torch.no_grad():
         for image_path in image_paths:
+            if image_path in features:
+                continue
             image = Image.open(image_path).convert('RGB')
             image = test_transform(image).unsqueeze(0).cuda()
             output = model.extract_features(image)
@@ -95,10 +119,8 @@ def load_model(model, model_path):
     print(f"Loading model from {model_path}")
     pretrained_dict = torch.load(model_path)
     model_dict = model.state_dict()
-
-    # Filter out unnecessary keys
     pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-    model_dict.update(pretrained_dict)  # Update the model with pretrained weights
+    model_dict.update(pretrained_dict)
     model.load_state_dict(model_dict)
 
 def cosine_metric(x1, x2):
@@ -136,7 +158,6 @@ def cal_accuracy(y_score, y_true):
         if acc > best_acc:
             best_acc = acc
             best_th = th
-
     return (best_acc, best_th)
 
 def test_performance(features, pair_list):
@@ -144,8 +165,8 @@ def test_performance(features, pair_list):
     Test performance using cosine similarity between pairs of features.
     
     Args:
-        features (dict): Dictionary mapping file paths to their feature vectors
-        pair_list (str): Path to the file containing pairs to test
+        features (dict): Dictionary mapping file paths to their feature vectors.
+        pair_list (str): Path to the file containing pairs to test.
     
     Returns:
         tuple: (accuracy, threshold)
@@ -155,22 +176,208 @@ def test_performance(features, pair_list):
 
     sims = []
     labels = []
+    
     for pair in pairs:
         splits = pair.strip().split()
         path1, path2, label = splits[0], splits[1], int(splits[2])
-        
-        # Get features using file paths as keys
         fe_1 = features[path1]
         fe_2 = features[path2]
         sim = cosine_metric(fe_1, fe_2)
-
         sims.append(sim)
         labels.append(label)
 
     acc, th = cal_accuracy(sims, labels)
     return acc, th
 
-def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=6000):
+def nearest_neighbor_metric(features, n_neighbors=5):
+    """
+    Calculate nearest neighbor distances for each feature vector.
+    
+    Args:
+        features (numpy.ndarray): Array of feature vectors
+        n_neighbors (int): Number of neighbors to consider
+    
+    Returns:
+        numpy.ndarray: Array of distances to the nearest neighbors
+    """
+    nn = NearestNeighbors(n_neighbors=n_neighbors)
+    nn.fit(features)
+    distances, _ = nn.kneighbors(features)
+    return distances
+
+def test_performance_with_nn(features, pair_list, n_neighbors=5):
+    """
+    Test performance using nearest neighbor distances between pairs of features.
+    
+    Args:
+        features (dict): Dictionary mapping file paths to their feature vectors.
+        pair_list (str): Path to the file containing pairs to test.
+        n_neighbors (int): Number of neighbors to consider
+    
+    Returns:
+        tuple: (accuracy, threshold)
+    """
+    with open(pair_list, 'r') as fd:
+        pairs = fd.readlines()
+
+    paths = list(features.keys())
+    feature_vectors = np.array([features[path] for path in paths])
+
+    nn = NearestNeighbors(n_neighbors=n_neighbors)
+    nn.fit(feature_vectors)
+    distances, _ = nn.kneighbors(feature_vectors)
+
+    sims = []
+    labels = []
+    
+    for pair in pairs:
+        splits = pair.strip().split()
+        path1, path2, label = splits[0], splits[1], int(splits[2])
+        idx1 = paths.index(path1)
+        idx2 = paths.index(path2)
+        sim = np.mean(distances[idx1]) + np.mean(distances[idx2])
+        sims.append(sim)
+        labels.append(label)
+
+    acc, th = cal_accuracy(sims, labels)
+    return acc, th
+
+def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
+    """
+    Enhanced UMAP visualization with image thumbnails and class regions.
+    
+    Args:
+        features (dict): A dictionary mapping image paths to feature vectors
+        num_people (int): Number of random people to select for visualization
+        random_seed (int): Random seed for reproducibility
+        save_path (str or None): If provided, saves the plot to this path. If None, the plot is shown
+    """
+    np.random.seed(random_seed)
+
+    # Extract and process names
+    file_paths = list(features.keys())
+    person_names = []
+    for path in file_paths:
+        parts = path.split(os.sep)
+        for i, part in enumerate(parts):
+            if part == "lfw_funneled" and i + 1 < len(parts):
+                person_names.append(parts[i + 1])
+                break
+        else:
+            person_names.append(parts[-2])
+
+    # Get unique names and their counts
+    name_counts = {}
+    for name in person_names:
+        name_counts[name] = name_counts.get(name, 0) + 1
+
+    # Filter to include only people with multiple images
+    min_images = 3
+    qualified_names = [name for name, count in name_counts.items() if count >= min_images]
+
+    if len(qualified_names) < num_people:
+        print(f"Warning: Only {len(qualified_names)} people have {min_images}+ images. Using all of them.")
+        selected_names = qualified_names
+    else:
+        selected_names = np.random.choice(qualified_names, size=num_people, replace=False)
+
+    # Filter features
+    filtered_features = []
+    filtered_names = []
+    filtered_paths = []
+    for path, feature in features.items():
+        person_name = None
+        parts = path.split(os.sep)
+        for i, part in enumerate(parts):
+            if part == "lfw_funneled" and i + 1 < len(parts):
+                person_name = parts[i + 1]
+                break
+        else:
+            person_name = parts[-2]
+
+        if person_name in selected_names:
+            filtered_features.append(feature)
+            filtered_names.append(person_name)
+            filtered_paths.append(path)
+
+    # Convert to numpy array and normalize
+    feature_vectors = np.array(filtered_features)
+    feature_vectors = feature_vectors / np.linalg.norm(feature_vectors, axis=1, keepdims=True)
+
+    # Apply UMAP
+    print("Applying UMAP dimensionality reduction...")
+    reducer = umap.UMAP(n_components=2, random_state=42)
+    reduced_features = reducer.fit_transform(feature_vectors)
+
+    # Plotting
+    plt.figure(figsize=(20, 15))
+
+    unique_filtered_names = list(set(filtered_names))
+    num_colors = len(unique_filtered_names)
+    colors = plt.cm.rainbow(np.linspace(0, 1, num_colors))
+    name_to_color = dict(zip(unique_filtered_names, colors))
+
+    ax = plt.gca()
+
+    # Plot class regions using convex hulls
+    for name in unique_filtered_names:
+        # Get indices of points belonging to this person
+        indices = [i for i, n in enumerate(filtered_names) if n == name]
+        if len(indices) < 3:  # Convex hull requires at least 3 points
+            continue
+
+        # Get the points for this person
+        points = reduced_features[indices]
+
+        # Compute convex hull
+        hull = ConvexHull(points)
+
+        # Plot the convex hull region
+        plt.fill(points[hull.vertices, 0], points[hull.vertices, 1], color=name_to_color[name], alpha=0.2)
+
+    # Plot individual points with thumbnails
+    for (x, y), name, path in zip(reduced_features, filtered_names, filtered_paths):
+        img = plt.imread(path)
+        thumbnail = OffsetImage(img, zoom=0.1)
+    
+        # Add colored background
+        bg_color = name_to_color[name]
+        ab = AnnotationBbox(thumbnail, (x, y), frameon=True, 
+                            fontsize=10, 
+                            bboxprops=dict(facecolor=bg_color, alpha=0.5))
+    
+        ax.add_artist(ab)
+        plt.scatter(x, y, c=bg_color, alpha=0.8)
+
+    plt.title(f"UMAP Visualization of Face Feature Embeddings with Class Regions\n({len(selected_names)} People)")
+    plt.xlabel("UMAP component 1")
+    plt.ylabel("UMAP component 2")
+
+    # Sort by count and create legend
+    selected_names_sorted = sorted(selected_names, key=lambda x: name_counts[x], reverse=True)
+    legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
+                                markerfacecolor=name_to_color[name], 
+                                label=f"{name} ({name_counts[name]} images)", 
+                                markersize=10)
+                      for name in selected_names_sorted]
+
+    plt.legend(handles=legend_elements, 
+              title="People (Image Count)",
+              bbox_to_anchor=(1.05, 1),
+              loc='upper left',
+              borderaxespad=0.)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
+
+def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=50):
     """
     Generate a pair list for LFW testing.
 
@@ -202,7 +409,7 @@ def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=6000):
                 positive_pairs.append((image_paths[i], image_paths[j], 1))
 
     # Limit the number of positive pairs to match num_pairs
-    num_positive_pairs = min(len(positive_pairs), num_pairs // 2)  # Balance between positive and negative pairs
+    num_positive_pairs = min(len(positive_pairs), num_pairs // 2)
     pairs.extend(positive_pairs[:num_positive_pairs])
 
     # Generate negative pairs
@@ -226,231 +433,34 @@ def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=6000):
 
     print(f"Generated {len(pairs)} pairs, saved to {pair_file}")
 
-def visualize_with_tsne(features, save_path=None):
-    """
-    Visualizes the feature embeddings using t-SNE with colors and labels based on person names.
-
-    Args:
-        features (dict): A dictionary mapping image paths to feature vectors
-        save_path (str or None): If provided, saves the plot to this path. If None, the plot is shown
-    """
-    # Convert features dictionary to a list of feature vectors
-    feature_vectors = list(features.values())
-    file_paths = list(features.keys())
-    
-    # Extract person names from file paths
-    person_names = []
-    for path in file_paths:
-        # Split path and get the directory name which is the person's name
-        parts = path.split(os.sep)
-        # Find the person name in the path (it's usually between lfw_funneled and the image name)
-        for i, part in enumerate(parts):
-            if part == "lfw_funneled" and i + 1 < len(parts):
-                person_names.append(parts[i + 1])
-                break
-        else:
-            # If lfw_funneled is not found, take the second to last component
-            person_names.append(parts[-2])
-
-    # Convert feature vectors to a NumPy array
-    feature_vectors = np.array(feature_vectors)
-
-    # Apply t-SNE to reduce dimensionality to 2D
-    print("Applying t-SNE dimensionality reduction...")
-    tsne = TSNE(n_components=2, random_state=42)
-    reduced_features = tsne.fit_transform(feature_vectors)
-
-    # Get unique names and assign colors
-    unique_names = list(set(person_names))
-    num_colors = len(unique_names)
-    colors = plt.cm.rainbow(np.linspace(0, 1, num_colors))
-    name_to_color = dict(zip(unique_names, colors))
-
-    # Create color array for scatter plot
-    point_colors = [name_to_color[name] for name in person_names]
-
-    # Create the plot
-    plt.figure(figsize=(15, 10))
-    
-    # Plot points
-    scatter = plt.scatter(reduced_features[:, 0], reduced_features[:, 1], 
-                         c=point_colors, 
-                         s=50,
-                         alpha=0.6)
-
-    # Add title and labels
-    plt.title("t-SNE Visualization of Face Feature Embeddings")
-    plt.xlabel("t-SNE component 1")
-    plt.ylabel("t-SNE component 2")
-
-    # Create legend for unique persons
-    # To avoid too many labels, limit to top 20 persons with most images
-    name_counts = {}
-    for name in person_names:
-        name_counts[name] = name_counts.get(name, 0) + 1
-    
-    # Sort by count and take top 20
-    top_names = sorted(name_counts.items(), key=lambda x: x[1], reverse=True)[:20]
-    top_names = [name for name, _ in top_names]
-    
-    # Create legend handles for top names
-    legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
-                                markerfacecolor=name_to_color[name], 
-                                label=name, markersize=10)
-                      for name in top_names]
-    
-    # Add legend
-    plt.legend(handles=legend_elements, 
-              title="Top 20 People",
-              bbox_to_anchor=(1.05, 1),
-              loc='upper left',
-              borderaxespad=0.)
-
-    # Adjust layout to prevent legend cutoff
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300)
-        print(f"Plot saved to {save_path}")
-    else:
-        plt.show()
-    
-    plt.close()
-
-def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
-    """
-    Enhanced UMAP visualization with better person selection and filtering for high-dimensional features.
-
-    Args:
-        features (dict): A dictionary mapping image paths to feature vectors
-        num_people (int): Number of random people to select for visualization
-        random_seed (int): Random seed for reproducibility
-        save_path (str or None): If provided, saves the plot to this path. If None, the plot is shown
-    """
-    np.random.seed(random_seed)
-    
-    # Extract and process names
-    file_paths = list(features.keys())
-    person_names = []
-    for path in file_paths:
-        parts = path.split(os.sep)
-        for i, part in enumerate(parts):
-            if part == "lfw_funneled" and i + 1 < len(parts):
-                person_names.append(parts[i + 1])
-                break
-        else:
-            person_names.append(parts[-2])
-
-    # Get unique names and their counts
-    name_counts = {}
-    for name in person_names:
-        name_counts[name] = name_counts.get(name, 0) + 1
-    
-    # Filter to include only people with multiple images
-    min_images = 3  # Minimum number of images per person
-    qualified_names = [name for name, count in name_counts.items() if count >= min_images]
-    
-    if len(qualified_names) < num_people:
-        print(f"Warning: Only {len(qualified_names)} people have {min_images}+ images. Using all of them.")
-        selected_names = qualified_names
-    else:
-        selected_names = np.random.choice(qualified_names, size=num_people, replace=False)
-    
-    # Filter features
-    filtered_features = []
-    filtered_names = []
-    for path, feature in features.items():
-        person_name = None
-        parts = path.split(os.sep)
-        for i, part in enumerate(parts):
-            if part == "lfw_funneled" and i + 1 < len(parts):
-                person_name = parts[i + 1]
-                break
-        else:
-            person_name = parts[-2]
-            
-        if person_name in selected_names:
-            filtered_features.append(feature)
-            filtered_names.append(person_name)
-
-    # Convert to numpy array and normalize
-    feature_vectors = np.array(filtered_features)
-    
-    # Normalize features (important for dimensionality reduction)
-    feature_vectors = feature_vectors / np.linalg.norm(feature_vectors, axis=1, keepdims=True)
-    
-    print("Applying UMAP dimensionality reduction...")
-    reducer = umap.UMAP(n_components=2, random_state=42)
-    reduced_features = reducer.fit_transform(feature_vectors)
-
-    # Plotting
-    plt.figure(figsize=(15, 10))
-    
-    # Create color scheme
-    unique_filtered_names = list(set(filtered_names))
-    num_colors = len(unique_filtered_names)
-    colors = plt.cm.rainbow(np.linspace(0, 1, num_colors))
-    name_to_color = dict(zip(unique_filtered_names, colors))
-    point_colors = [name_to_color[name] for name in filtered_names]
-    
-    # Create scatter plot
-    scatter = plt.scatter(reduced_features[:, 0], reduced_features[:, 1], 
-                         c=point_colors, 
-                         s=100,  # Larger points for better visibility
-                         alpha=0.7)  # Increased opacity
-
-    plt.title(f"UMAP Visualization of Face Feature Embeddings\n({len(selected_names)} People)")
-    plt.xlabel("UMAP component 1")
-    plt.ylabel("UMAP component 2")
-
-    # Sort by count and create legend
-    selected_names_sorted = sorted(selected_names, key=lambda x: name_counts[x], reverse=True)
-    legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
-                                markerfacecolor=name_to_color[name], 
-                                label=f"{name} ({name_counts[name]} images)", 
-                                markersize=10)
-                      for name in selected_names_sorted]
-    
-    plt.legend(handles=legend_elements, 
-              title="People (Image Count)",
-              bbox_to_anchor=(1.05, 1),
-              loc='upper left',
-              borderaxespad=0.)
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, bbox_inches='tight', dpi=300)
-        print(f"Plot saved to {save_path}")
-    else:
-        plt.show()
-    
-    plt.close()
-
-def lfw_test_with_features(model, image_paths, pair_list, feature_save_path=None, tsne_save_path=None):
+def lfw_test_with_features(model, pair_list, feature_save_path=None, tsne_save_path=None, use_nn=False):
     """
     Perform LFW test and optionally save features and t-SNE visualization.
     
     Args:
         model: The neural network model
-        image_paths (list): List of image paths to process
         pair_list (str): Path to the file containing pairs to test
         feature_save_path (str, optional): Path to save extracted features
         tsne_save_path (str, optional): Path to save t-SNE visualization
+        use_nn (bool): If True, use nearest neighbor metric instead of cosine similarity
     
     Returns:
         float: Accuracy score
     """
     s = time.time()
-    features = get_features_from_images(model, image_paths, feature_save_path)
+    features = get_features_from_images(model, pair_list, feature_save_path)
     print(f"Features extracted for {len(features)} images")
     t = time.time() - s
-    print('Total time is {}, average time is {}'.format(t, t / len(image_paths)))
+    print('Total time is {}, average time is {}'.format(t, t / len(features)))
 
     if tsne_save_path:
-        visualize_with_tsne(features, tsne_save_path)
+        visualize_with_umap(features, save_path=tsne_save_path, num_people=10)
 
-    acc, th = test_performance(features, pair_list)
+    if use_nn:
+        acc, th = test_performance_with_nn(features, pair_list)
+    else:
+        acc, th = test_performance(features, pair_list)
+
     print('LFW face verification accuracy: ', acc, 'threshold: ', th)
     return acc
 
@@ -459,22 +469,19 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate a face recognition model on LFW")
     parser.add_argument('--test_model_path', type=str, required=True, help="Path to the pretrained model (.pth file)")
     parser.add_argument('--dataset_root', type=str, required=True, help="Root directory for the LFW dataset")
-    parser.add_argument('--pair_file', type=str, required=True, help="File to save the generated pair list")
-    parser.add_argument('--tsne_save_path', type=str, required=True, help="File to save tsne_plot")
-    parser.add_argument('--feature_save_path', type=str, help="Path to save extracted features")
+    parser.add_argument('--pair_file', type=str, default="hasil/pair.txt", required=True, help="File to save the generated pair list")
+    parser.add_argument('--tsne_save_path', type=str, default="hasil/tsne.jpg", required=True, help="File to save tsne_plot")
+    parser.add_argument('--feature_save_path', type=str, default="hasil/feature.npy", help="Path to save extracted features")
+    parser.add_argument('--use_nn', action='store_true', help="Use nearest neighbor metric instead of cosine similarity")
 
     args = parser.parse_args()
 
     # Initialize model
-    model = ViRWithArcMargin(
-        image_size=224,
-        patch_size=32,
-        bucket_size=5,
+    from reformer.vit_pytorch import FaceTransformer  
+    model = FaceTransformer(
         num_classes=5749,
-        dim=256,
-        depth=12,
-        heads=8,
-        num_mem_kv=0
+        arc_s=64.0, 
+        arc_m=0.5
     )
     
     # Load pretrained weights and move model to GPU
@@ -482,22 +489,15 @@ def main():
     model.to(torch.device("cuda"))
 
     # Generate pair list for testing
-    generate_lfw_pair_list(args.dataset_root, args.pair_file)
-
-    # Collect all image paths
-    image_paths = []
-    for root, _, files in os.walk(args.dataset_root):
-        for file in files:
-            if file.endswith('.jpg'):
-                image_paths.append(os.path.join(root, file))
+    generate_lfw_pair_list(args.dataset_root, args.pair_file, num_pairs=50)
 
     # Perform LFW test
     lfw_test_with_features(
         model,
-        image_paths,
         args.pair_file,
         args.feature_save_path,
-        args.tsne_save_path
+        args.tsne_save_path,
+        args.use_nn
     )
 
 if __name__ == '__main__':

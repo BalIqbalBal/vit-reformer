@@ -1,11 +1,13 @@
 import os
 import torch
+import torch.nn as nn
+
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import argparse
 
-from utils.datasets import get_lpfw_dataloaders
+from utils.datasets import get_lpfw_dataloaders, get_student_dataloader
 from utils.loss import FocalLoss
 
 def initialize_model(model_type, num_classes, device):
@@ -21,7 +23,7 @@ def initialize_model(model_type, num_classes, device):
             heads=8, 
             arc_s=64.0, 
             arc_m=0.50,
-            n_hashes=2,
+            n_hashes=1,
             bucket_size=5
         )
     elif model_type == "vir":
@@ -33,8 +35,9 @@ def initialize_model(model_type, num_classes, device):
             dim=256, 
             depth=12, 
             heads=8,
-            n_hashes=2,
-            bucket_size=5 
+            n_hashes=4,
+            bucket_size=5,
+            num_mem_kv=3
         )
     elif model_type == "vit":
         from vit_pytorch import ViT
@@ -53,8 +56,8 @@ def initialize_model(model_type, num_classes, device):
         from reformer.vit_pytorch import FaceTransformer  
         model = FaceTransformer(
             num_classes=num_classes,
-            arc_s=30.0, 
-            arc_m=0.50
+            arc_s=4.0, 
+            arc_m=0.23
         )
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
@@ -75,14 +78,27 @@ def train(args):
     print("Using device:", device)
 
     # Dataset selection and configuration
-    train_loader, test_loader = get_lpfw_dataloaders(args.batch_size)
+    print(f"load ata loader {args.data_dir}")
+    if args.data_dir is not None:
+        train_loader, test_loader = get_student_dataloader(args.data_dir, batch_size=args.batch_size)
+        
+        all_labels = []
+        for dataset in train_loader.dataset.datasets:
+            all_labels.extend(dataset.labels)
 
+        # Calculate the number of unique classes
+        num_classes = len(set(all_labels))
+        print(f"Number of classes: {num_classes}")
+        
+    else:
+        train_loader, test_loader = get_lpfw_dataloaders(args.batch_size)
+        num_classes = len(train_loader.dataset.dataset.class_to_idx)
+        
     # Initialize model
-    num_classes = len(train_loader.dataset.dataset.class_to_idx)
     model = initialize_model(args.model_type, num_classes, device)
 
     # Loss and optimizer
-    criterion = FocalLoss(gamma=2.0, alpha=None)  # Using Focal Loss
+    criterion = criterion = nn.CrossEntropyLoss() 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
     # Training loop
@@ -99,7 +115,11 @@ def train(args):
             best_accuracy = test_accuracy
             torch.save(model.state_dict(), os.path.join(checkpoint_dir, "best_model.pth"))
             print(f"New best accuracy: {best_accuracy:.4f}. Model saved.")
-    
+        
+        if (epoch + 1) % 10 == 0:
+            torch.save(model.state_dict(), os.path.join(checkpoint_dir, "checkpoint.pth"))
+            print(f"Model saved at epoch {epoch+1}")
+
     # Save final model after all epochs
     final_model_path = os.path.join(checkpoint_dir, "final_model.pth")
     torch.save(model.state_dict(), final_model_path)
@@ -121,10 +141,10 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, de
 
         optimizer.zero_grad()
 
-        try: 
-            logits = model(images, labels)
-        except:
-            logits = model(images)
+        #try: 
+        #    logits = model(images, labels)
+        #except:
+        logits = model(images)
         loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()
@@ -162,10 +182,10 @@ def evaluate(model, test_loader, criterion, epoch, writer, device):
         for images, labels in tqdm(test_loader, desc="Evaluating", leave=False):
             images, labels = images.to(device), labels.to(device)
 
-            try: 
-                logits = model(images, labels)
-            except:
-                logits = model(images)
+            #try: 
+           #     logits = model(images, labels)
+            #except:
+            logits = model(images)
 
             loss = criterion(logits, labels)
             total_loss += loss.item()
@@ -198,6 +218,8 @@ if __name__ == "__main__":
     parser.add_argument("--tensorboard-dir", type=str, default="/opt/ml/output/tensorboard/", help="Directory for TensorBoard logs")
     parser.add_argument("--model-dir", type=str, default="./models", help="Directory to save trained models")
     parser.add_argument("--model-type", type=str, default="vir", choices=["vir", "vit", "virface", "vitface"], help="Model type to train (vir or vit)")
+    parser.add_argument("--data-dir", type=str, default="./models", help="Directory to save trained models")
+    
 
     args = parser.parse_args()
     train(args)
