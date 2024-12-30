@@ -40,7 +40,7 @@ class ModelProfiler:
         torch.cuda.empty_cache()
         gc.collect()
         initial_memory = torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
-        initial_ram = psutil.Process().memory_info().rss  # Initial CPU memory usage
+        initial_ram = psutil.Process().memory_full_info().uss  # Initial CPU memory usage (USS)
 
         self.model.eval()
         max_memory = 0
@@ -73,8 +73,8 @@ class ModelProfiler:
                 max_memory = max(max_memory, current_memory)
                 batch_memories.append(current_memory)
 
-                # Track CPU memory usage during the batch
-                batch_cpu_memories.append(psutil.Process().memory_info().rss / 1024**2)  # Convert to MB
+                # Track CPU memory usage during the batch (USS)
+                batch_cpu_memories.append(psutil.Process().memory_full_info().uss / 1024**2)  # Convert to MB
 
                 # Track total CPU memory usage
                 cpu_memories.append(psutil.virtual_memory().used / 1024**2)  # Convert to MB
@@ -88,7 +88,7 @@ class ModelProfiler:
         sample_targets = sample_targets.to(self.device)
         layer_profiles = self.profile_layers(sample_inputs)
 
-        final_ram = psutil.Process().memory_info().rss
+        final_ram = psutil.Process().memory_full_info().uss  # Final CPU memory usage (USS)
 
         # Compile results
         results = {
@@ -111,7 +111,7 @@ class ModelProfiler:
                 'initial_ram_mb': initial_ram / 1024**2,
                 'final_ram_mb': final_ram / 1024**2,
                 'ram_difference_mb': (final_ram - initial_ram) / 1024**2,
-                'mean_cpu_memory_mb': np.mean(batch_cpu_memories),  # Mean CPU memory during profiling
+                'mean_cpu_memory_mb': np.mean(batch_cpu_memories),  # Mean CPU memory during profiling (USS)
                 'mean_cpu_total_memory_mb': np.mean(cpu_memories),  # Mean total CPU memory during profiling
             },
             'layer_profiles': layer_profiles
