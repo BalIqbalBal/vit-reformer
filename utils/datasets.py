@@ -1,4 +1,4 @@
-simport torch
+import torch
 from torch.utils.data import DataLoader, Dataset, random_split, ConcatDataset
 from torchvision import datasets, transforms
 from torchvision.transforms import InterpolationMode
