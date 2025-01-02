@@ -1,4 +1,4 @@
-from reformer.reformer_pytorch import ViRWithArcMargin, ViR
+from reformer.vir_pytorch import ViR
 from vit_pytorch import ViT
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,33 +34,22 @@ def create_models(patch_size, num_classes):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device("cpu")
 
-    try: 
-        model_reformer = ViR(
-            image_size=224,
+    model_reformer = ViR(
+            img_size=224,
             patch_size=patch_size,
-            num_classes=2,
-            dim=100,
+            in_channels=num_classes,  # Corrected from 1000 to 3 (input channels for RGB images)
+            dim=256,
             depth=12,
-            heads=9,
-            bucket_size=2,
-            emb_dropout=0.1,
-            num_mem_kv=3,
-            n_hashes=1
-        )
-    except:
-        model_reformer = ViR(
-            image_size=224,
-            patch_size=patch_size,
-            num_classes=2,
-            dim=100,
-            depth=12,
-            heads=9,
+            heads=8,
             bucket_size=5,
+            n_hashes=1,
+            ff_mult=4,  # Added missing argument
+            lsh_dropout=0.1,  # Corrected from dropout to lsh_dropout
+            ff_dropout=0.1,  # Added missing argument
             emb_dropout=0.1,
-            num_mem_kv=0,
-            n_hashes=1
+            use_rezero=False  # Added missing argument
         )
-
+    
     model_vit = ViT(
         image_size=224,
         patch_size=patch_size,

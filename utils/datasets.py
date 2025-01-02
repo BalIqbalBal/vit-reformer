@@ -102,27 +102,23 @@ def get_student_dataloader(root_folder, transform=None, batch_size=32):
     a1_test_path = os.path.join(root_folder, 'A1', 'testing')
     a2_train_path = os.path.join(root_folder, 'A2', 'training')
     a2_test_path = os.path.join(root_folder, 'A2', 'testing')
-    #b1_train_path = os.path.join(root_folder, 'B1', 'training')
-    #b1_test_path = os.path.join(root_folder, 'B1', 'testing')
+    b1_train_path = os.path.join(root_folder, 'B1', 'training')
+    b1_test_path = os.path.join(root_folder, 'B1', 'testing')
 
     # Check if the paths exist
-    train_paths = [a1_train_path, a2_train_path] #, b1_train_path]
-    test_paths = [a1_test_path, a2_test_path] #, b1_test_path]
+    train_paths = [a1_train_path, a2_train_path, b1_train_path]
+    test_paths = [a1_test_path, a2_test_path, b1_test_path]
     for path in train_paths + test_paths:
         if not os.path.exists(path):
             raise FileNotFoundError(f"The path {path} does not exist.")
 
-    # Create individual train and test datasets
-    train_datasets = [
-        FaceDataset([a1_train_path], transform=test_transform),
-        FaceDataset([a2_train_path], transform=test_transform),
-        #FaceDataset([b1_train_path], transform=test_transform)
-    ]
-    test_datasets = [
-        FaceDataset([a1_test_path], transform=test_transform),
-        FaceDataset([a2_test_path], transform=test_transform),
-        #FaceDataset([b1_test_path], transform=test_transform)
-    ]
+    # Combine all train and test paths
+    combined_train_paths = [a1_train_path, a2_train_path, b1_train_path]
+    combined_test_paths = [a1_test_path, a2_test_path, b1_test_path]
+
+    # Create combined train and test datasets
+    train_datasets = [FaceDataset(combined_train_paths, transform=train_transform)]
+    test_datasets = [FaceDataset(combined_test_paths, transform=test_transform)]
 
     # Combine the train and test datasets
     combined_train_dataset = ConcatDataset(train_datasets)
@@ -131,7 +127,6 @@ def get_student_dataloader(root_folder, transform=None, batch_size=32):
     # Create DataLoaders for the combined datasets
     train_loader = DataLoader(combined_train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(combined_test_dataset, batch_size=batch_size, shuffle=False)
-
 
     return train_loader, test_loader
 

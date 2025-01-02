@@ -444,6 +444,103 @@ class LSHAttention(nn.Module):
         # return output, attention matrix, and bucket distribution
         return out, attn, buckets
 
+class ViTLSHAttention(nn.Module):
+    def __init__(self, 
+                 dim, 
+                 heads=8, 
+                 bucket_size=64, 
+                 n_hashes=8, 
+                 dropout=0., 
+                 return_attn=False):
+        super().__init__()
+        self.dim = dim
+        self.heads = heads
+        self.bucket_size = bucket_size
+        self.n_hashes = n_hashes
+        self.return_attn = return_attn
+
+        self.dropout = nn.Dropout(dropout)
+        self.to_qk = nn.Linear(dim, dim)
+        self.to_v = nn.Linear(dim, dim)
+        self.to_out = nn.Linear(dim, dim)
+
+    def hash_vectors(self, n_buckets, vecs):
+        batch_size, seqlen, dim = vecs.shape
+        device = vecs.device
+
+        assert n_buckets % 2 == 0
+        rot_size = n_buckets
+
+        rotations_shape = (1, dim, self.n_hashes, rot_size // 2)
+        random_rotations = torch.randn(rotations_shape, dtype=vecs.dtype, device=device).expand(batch_size, -1, -1, -1)
+
+        rotated_vecs = torch.einsum('btf,bfhi->bhti', vecs, random_rotations)
+        rotated_vecs = torch.cat([rotated_vecs, -rotated_vecs], dim=-1)
+        buckets = torch.argmax(rotated_vecs, dim=-1)
+
+        offsets = torch.arange(self.n_hashes, device=device)
+        offsets = torch.reshape(offsets * n_buckets, (1, -1, 1))
+        buckets = torch.reshape(buckets + offsets, (batch_size, -1,))
+        return buckets
+
+    def forward(self, x):
+        batch_size, seqlen, dim = x.shape
+        device = x.device
+
+        qk = self.to_qk(x)
+        v = self.to_v(x)
+
+        n_buckets = seqlen // self.bucket_size
+        buckets = self.hash_vectors(n_buckets, qk)
+
+        total_hashes = self.n_hashes
+        ticker = torch.arange(total_hashes * seqlen, device=device).unsqueeze(0).expand_as(buckets)
+        buckets_and_t = seqlen * buckets + (ticker % seqlen)
+        buckets_and_t = buckets_and_t.detach()
+
+        sbuckets_and_t, sticker = sort_key_val(buckets_and_t, ticker, dim=-1)
+        _, undo_sort = sticker.sort(dim=-1)
+
+        st = (sticker % seqlen)
+        sqk = batched_index_select(qk, st)
+        sv = batched_index_select(v, st)
+
+        chunk_size = total_hashes * n_buckets
+        bq_t = bkv_t = torch.reshape(st, (batch_size, chunk_size, -1))
+        bqk = torch.reshape(sqk, (batch_size, chunk_size, -1, dim))
+        bv = torch.reshape(sv, (batch_size, chunk_size, -1, dim))
+
+        bq = bqk
+        bk = F.normalize(bqk, p=2, dim=-1).type_as(bq)
+
+        dots = torch.einsum('bhie,bhje->bhij', bq, bk) * (dim ** -0.5)
+        dots = self.dropout(dots)
+
+        bo = torch.einsum('buij,buje->buie', dots, bv)
+        so = torch.reshape(bo, (batch_size, -1, dim))
+
+        o = batched_index_select(so, undo_sort)
+        o = torch.reshape(o, (batch_size, total_hashes, seqlen, dim))
+        out = torch.sum(o, dim=1)
+
+        out = self.to_out(out)
+
+        if self.return_attn:
+            attn = torch.sum(dots, dim=1)
+            return out, attn
+        return out
+
+def sort_key_val(t1, t2, dim=-1):
+    values, indices = t1.sort(dim=dim)
+    t2 = t2.expand_as(t1)
+    return values, t2.gather(dim, indices)
+
+def batched_index_select(t, inds):
+    batch_size, seqlen, dim = t.shape
+    device = t.device
+    inds = inds.reshape(batch_size, -1)
+    inds = inds.unsqueeze(-1).expand(-1, -1, dim)
+    return t.gather(1, inds)
 # simple full attention
 
 class FullQKAttention(nn.Module):
