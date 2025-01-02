@@ -804,7 +804,7 @@ class ViR(nn.Module):
         x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
 
         x = self.to_latent(x)
-        return x, dim=1
+        return x
 
 class ViRWithArcMargin(nn.Module):
     def __init__(self, *, image_size, patch_size, bucket_size, num_classes, dim, depth, heads, num_mem_kv, n_hashes=2, pool='cls', channels=3, dim_head=64, emb_dropout=0., arc_s=30.0, arc_m=0.50):
