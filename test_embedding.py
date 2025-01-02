@@ -377,9 +377,13 @@ def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
 
     plt.close()
 
+import os
+import random
+from itertools import permutations
+
 def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=50):
     """
-    Generate a pair list for LFW testing.
+    Generate a pair list for LFW testing, restricting paths to the 'testing' directory.
 
     Args:
         dataset_root (str): Root directory of the LFW dataset
@@ -388,8 +392,10 @@ def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=50):
     """
     label_to_images = {}
 
-    # Collect image file paths by label
+    # Collect image file paths by label within the 'testing' directory
     for root, _, files in os.walk(dataset_root):
+        if 'testing' not in os.path.relpath(root, dataset_root).split(os.sep):
+            continue
         for file in files:
             if file.endswith('.jpg'):
                 label = os.path.basename(root)

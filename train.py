@@ -16,7 +16,7 @@ def initialize_model(model_type, num_classes, device):
         from reformer.reformer_pytorch import ViRWithArcMargin
         model = ViRWithArcMargin(
             image_size=224, 
-            patch_size=32, 
+            patch_size=8, 
             num_classes=num_classes, 
             dim=256, 
             depth=12, 
@@ -30,7 +30,7 @@ def initialize_model(model_type, num_classes, device):
         from reformer.reformer_pytorch import ViR
         model = ViR(
             image_size=224, 
-            patch_size=16, 
+            patch_size=8, 
             num_classes=num_classes, 
             dim=256, 
             depth=12, 
@@ -43,7 +43,7 @@ def initialize_model(model_type, num_classes, device):
         from vit_pytorch import ViT
         model = ViT(
             image_size = 224,
-            patch_size = 16,
+            patch_size = 8,
             num_classes = num_classes,
             dim = 256,
             depth = 12,
