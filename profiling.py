@@ -32,12 +32,12 @@ patch_sizes = [4, 8, 16, 32]
 def create_models(patch_size, num_classes):
     """Create both models with given patch size and move them to the device."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
 
     model_reformer = ViR(
             img_size=224,
             patch_size=patch_size,
-            in_channels=num_classes,  # Corrected from 1000 to 3 (input channels for RGB images)
+            in_channels=3,  # Corrected from 1000 to 3 (input channels for RGB images)
+            num_classes=num_classes,
             dim=256,
             depth=12,
             heads=8,

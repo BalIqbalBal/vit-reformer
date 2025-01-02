@@ -134,10 +134,12 @@ class ViR(nn.Module):
         self,
         img_size=224,
         patch_size=16,
+        num_classes=68,
         in_channels=3,
         dim=768,
         depth=12,
         heads=8,
+        pool = 'cls',
         bucket_size=64,
         n_hashes=8,
         ff_mult=4,
@@ -154,6 +156,7 @@ class ViR(nn.Module):
         patch_height = patch_width = patch_size
         patch_dim = in_channels * patch_height * patch_width
         num_patches = (img_size // patch_size) ** 2
+        assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
 
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_height, p2=patch_width),
@@ -182,6 +185,11 @@ class ViR(nn.Module):
 
             self.layers.append(nn.ModuleList([attn, ff]))
 
+        self.pool = pool
+        self.to_latent = nn.Identity()
+
+        self.mlp_head = nn.Linear(dim, num_classes)
+
     def forward(self, x):
         # Patch embedding
         x = self.to_patch_embedding(x)  # (batch_size, num_patches, dim)
@@ -200,6 +208,32 @@ class ViR(nn.Module):
             x = attn(x) + x
             x = ff(x) + x
 
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
+
+        x = self.to_latent(x)
+        return self.mlp_head(x)
+    
+    def extract_features(self, x):
+        # Patch embedding
+        x = self.to_patch_embedding(x)  # (batch_size, num_patches, dim)
+
+        # Add cls token
+        b, n, _ = x.shape
+        cls_tokens = self.cls_token.expand(b, -1, -1)  # (batch_size, 1, dim)
+        x = torch.cat((cls_tokens, x), dim=1)  # (batch_size, num_patches + 1, dim)
+
+        # Add positional embeddings
+        x += self.pos_embedding[:, :(n + 1)]
+        x = self.dropout(x)
+
+        # Apply Reformer layers
+        for attn, ff in self.layers:
+            x = attn(x) + x
+            x = ff(x) + x
+
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
+
+        x = self.to_latent(x)
         return x
 
 # PreNorm and ReZero Wrappers

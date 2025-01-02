@@ -27,17 +27,22 @@ def initialize_model(model_type, num_classes, device):
             bucket_size=5
         )
     elif model_type == "vir":
-        from reformer.reformer_pytorch import ViR
+        from reformer.vir_pytorch import ViR
         model = ViR(
-            image_size=224, 
-            patch_size=8, 
-            num_classes=num_classes, 
-            dim=256, 
-            depth=12, 
+            img_size=224,
+            patch_size=8,
+            in_channels=3,  # Corrected from 1000 to 3 (input channels for RGB images)
+            num_classes=num_classes,
+            dim=256,
+            depth=12,
             heads=8,
-            n_hashes=4,
             bucket_size=5,
-            num_mem_kv=3
+            n_hashes=1,
+            ff_mult=4,  # Added missing argument
+            lsh_dropout=0.1,  # Corrected from dropout to lsh_dropout
+            ff_dropout=0.1,  # Added missing argument
+            emb_dropout=0.1,
+            use_rezero=False  # Added missing argument
         )
     elif model_type == "vit":
         from vit_pytorch import ViT
