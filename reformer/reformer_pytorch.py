@@ -787,6 +787,24 @@ class ViR(nn.Module):
 
         x = self.to_latent(x)
         return self.mlp_head(x)
+    
+    def extract_features(self, img):
+        """
+        Extract normalized feature embeddings for visualization.
+        """
+        x = self.to_patch_embedding(img)
+        b, n, _ = x.shape
+
+        cls_tokens = repeat(self.cls_token, '1 1 d -> b 1 d', b=b)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x += self.pos_embedding[:, :(n + 1)]
+        x = self.dropout(x)
+
+        x = self.transformer(x)
+        x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
+
+        x = self.to_latent(x)
+        return x, dim=1
 
 class ViRWithArcMargin(nn.Module):
     def __init__(self, *, image_size, patch_size, bucket_size, num_classes, dim, depth, heads, num_mem_kv, n_hashes=2, pool='cls', channels=3, dim_head=64, emb_dropout=0., arc_s=30.0, arc_m=0.50):
@@ -854,7 +872,7 @@ class ViRWithArcMargin(nn.Module):
         x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
 
         x = self.to_latent(x)
-        return F.normalize(x, dim=1)
+        return x, dim=1
 
 # =================================================================================================================================
 
