@@ -5,3 +5,4 @@ product-key-memory
 tensorboard
 timm
 vit-pytorch
+umap-learn

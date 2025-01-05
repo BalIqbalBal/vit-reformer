@@ -13,12 +13,21 @@ from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from reformer.reformer_pytorch import ViRWithArcMargin
 
+import os
+import random
+import argparse
+import time
+import numpy as np
+import torch
+from PIL import Image
+from sklearn.neighbors import NearestNeighbors
 from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 import umap
 from scipy.spatial import ConvexHull
-from matplotlib.colors import ListedColormap
-
+from torchvision import transforms
+from torchvision.transforms import InterpolationMode
 
 # Define the transformations for the dataset
 test_transform = transforms.Compose([
@@ -242,6 +251,44 @@ def test_performance_with_nn(features, pair_list, n_neighbors=5):
     acc, th = cal_accuracy(sims, labels)
     return acc, th
 
+def is_black_image(image_path, threshold=0.95):
+    """
+    Check if an image is predominantly black.
+
+    Args:
+        image_path (str): Path to the image file.
+        threshold (float): Threshold for considering an image as black. 
+                           If the proportion of black pixels is greater than this, the image is considered black.
+
+    Returns:
+        bool: True if the image is predominantly black, False otherwise.
+    """
+    image = Image.open(image_path).convert('L')  # Convert to grayscale
+    image_array = np.array(image)
+    
+    # Calculate the proportion of black pixels
+    black_pixels = np.sum(image_array < 10)  # Pixels with value less than 10 are considered black
+    total_pixels = image_array.size
+    black_ratio = black_pixels / total_pixels
+    
+    return black_ratio > threshold
+
+def remove_black_images(dataset_root, threshold=0.95):
+    """
+    Remove black images from the dataset.
+
+    Args:
+        dataset_root (str): Root directory of the dataset.
+        threshold (float): Threshold for considering an image as black.
+    """
+    for root, _, files in os.walk(dataset_root):
+        for file in files:
+            if file.endswith('.jpg') or file.endswith('.png'):
+                image_path = os.path.join(root, file)
+                if is_black_image(image_path, threshold):
+                    print(f"Removing black image: {image_path}")
+                    os.remove(image_path)
+
 def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
     """
     Enhanced UMAP visualization with image thumbnails and class regions.
@@ -319,22 +366,6 @@ def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
 
     ax = plt.gca()
 
-    # Plot class regions using convex hulls
-    for name in unique_filtered_names:
-        # Get indices of points belonging to this person
-        indices = [i for i, n in enumerate(filtered_names) if n == name]
-        if len(indices) < 3:  # Convex hull requires at least 3 points
-            continue
-
-        # Get the points for this person
-        points = reduced_features[indices]
-
-        # Compute convex hull
-        hull = ConvexHull(points)
-
-        # Plot the convex hull region
-        plt.fill(points[hull.vertices, 0], points[hull.vertices, 1], color=name_to_color[name], alpha=0.2)
-
     # Plot individual points with thumbnails
     for (x, y), name, path in zip(reduced_features, filtered_names, filtered_paths):
         img = plt.imread(path)
@@ -376,10 +407,6 @@ def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
         plt.show()
 
     plt.close()
-
-import os
-import random
-from itertools import permutations
 
 def generate_lfw_pair_list(dataset_root, pair_file, num_pairs=50):
     """
@@ -460,7 +487,7 @@ def lfw_test_with_features(model, pair_list, feature_save_path=None, tsne_save_p
     print('Total time is {}, average time is {}'.format(t, t / len(features)))
 
     if tsne_save_path:
-        visualize_with_umap(features, save_path=tsne_save_path, num_people=10)
+        visualize_with_umap(features, save_path=tsne_save_path, num_people=68)
 
     if use_nn:
         acc, th = test_performance_with_nn(features, pair_list)
@@ -475,27 +502,37 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate a face recognition model on LFW")
     parser.add_argument('--test_model_path', type=str, required=True, help="Path to the pretrained model (.pth file)")
     parser.add_argument('--dataset_root', type=str, required=True, help="Root directory for the LFW dataset")
-    parser.add_argument('--pair_file', type=str, default="hasil/pair.txt", required=True, help="File to save the generated pair list")
-    parser.add_argument('--tsne_save_path', type=str, default="hasil/tsne.jpg", required=True, help="File to save tsne_plot")
+    parser.add_argument('--pair_file', type=str, default="hasil/pair.txt", help="File to save the generated pair list")
+    parser.add_argument('--tsne_save_path', type=str, default="hasil/tsne.jpg", help="File to save tsne_plot")
     parser.add_argument('--feature_save_path', type=str, default="hasil/feature.npy", help="Path to save extracted features")
     parser.add_argument('--use_nn', action='store_true', help="Use nearest neighbor metric instead of cosine similarity")
 
     args = parser.parse_args()
 
     # Initialize model
-    from reformer.vit_pytorch import FaceTransformer  
-    model = FaceTransformer(
-        num_classes=5749,
-        arc_s=64.0, 
-        arc_m=0.5
-    )
+    from reformer.vit_pytorch import ViT
+    model = ViT(
+            image_size = 224,
+            patch_size = 8,
+            num_classes = 68,
+            dim = 256,
+            depth = 12,
+            heads = 8,
+            mlp_dim = 2048,
+            dropout = 0.1,
+            emb_dropout = 0.1
+        )
     
     # Load pretrained weights and move model to GPU
     load_model(model, args.test_model_path)
     model.to(torch.device("cuda"))
+    
 
+    # Remove black images from the dataset
+    #remove_black_images(args.dataset_root)
+    
     # Generate pair list for testing
-    generate_lfw_pair_list(args.dataset_root, args.pair_file, num_pairs=50)
+    generate_lfw_pair_list(args.dataset_root, args.pair_file, num_pairs=6000)
 
     # Perform LFW test
     lfw_test_with_features(

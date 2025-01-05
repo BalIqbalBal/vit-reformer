@@ -1,14 +1,15 @@
 import os
 import torch
 import torch.nn as nn
-
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import argparse
 
+# Import custom utilities (assume these are defined in utils folder)
 from utils.datasets import get_lpfw_dataloaders, get_student_dataloader
 from utils.loss import FocalLoss
+
 
 def initialize_model(model_type, num_classes, device):
     """Initialize the model based on the selected type."""
@@ -47,15 +48,15 @@ def initialize_model(model_type, num_classes, device):
     elif model_type == "vit":
         from vit_pytorch import ViT
         model = ViT(
-            image_size = 224,
-            patch_size = 8,
-            num_classes = num_classes,
-            dim = 256,
-            depth = 12,
-            heads = 8,
-            mlp_dim = 2048,
-            dropout = 0.1,
-            emb_dropout = 0.1
+            image_size=224,
+            patch_size=8,
+            num_classes=num_classes,
+            dim=256,
+            depth=12,
+            heads=8,
+            mlp_dim=2048,
+            dropout=0.1,
+            emb_dropout=0.1
         )
     elif model_type == "vitface":
         from reformer.vit_pytorch import FaceTransformer  
@@ -83,7 +84,7 @@ def train(args):
     print("Using device:", device)
 
     # Dataset selection and configuration
-    print(f"load ata loader {args.data_dir}")
+    print(f"Load data loader from {args.data_dir}")
     if args.data_dir is not None:
         train_loader, test_loader = get_student_dataloader(args.data_dir, batch_size=args.batch_size)
         
@@ -103,14 +104,25 @@ def train(args):
     model = initialize_model(args.model_type, num_classes, device)
 
     # Loss and optimizer
-    criterion = criterion = nn.CrossEntropyLoss() 
+    criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+
+    # Load checkpoint if it exists
+    start_epoch = 0
+    best_accuracy = 0.0
+    checkpoint_path = os.path.join(checkpoint_dir, "checkpoint.pth")
+    if os.path.exists(checkpoint_path):
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_accuracy = checkpoint['best_accuracy']
+        print(f"Resuming training from epoch {start_epoch} with best accuracy {best_accuracy:.4f}")
 
     # Training loop
     num_epochs = args.epochs
-    best_accuracy = 0.0
-
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
         train_accuracy = train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, device)
         test_accuracy = evaluate(model, test_loader, criterion, epoch, writer, device)
@@ -121,9 +133,16 @@ def train(args):
             torch.save(model.state_dict(), os.path.join(checkpoint_dir, "best_model.pth"))
             print(f"New best accuracy: {best_accuracy:.4f}. Model saved.")
         
+        # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
-            torch.save(model.state_dict(), os.path.join(checkpoint_dir, "checkpoint.pth"))
-            print(f"Model saved at epoch {epoch+1}")
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_accuracy': best_accuracy
+            }
+            torch.save(checkpoint, os.path.join(checkpoint_dir, "checkpoint.pth"))
+            print(f"Checkpoint saved at epoch {epoch + 1}")
 
     # Save final model after all epochs
     final_model_path = os.path.join(checkpoint_dir, "final_model.pth")
@@ -133,7 +152,7 @@ def train(args):
     # Close TensorBoard writer
     writer.close()
 
-# Training and evaluation function
+
 def train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, device):
     model.train()
     total_loss = 0.0
@@ -146,9 +165,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, de
 
         optimizer.zero_grad()
 
-        #try: 
-        #    logits = model(images, labels)
-        #except:
+        # Forward pass
         logits = model(images)
         loss = criterion(logits, labels)
         loss.backward()
@@ -156,6 +173,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, de
 
         total_loss += loss.item()
 
+        # Calculate predictions
         _, preds = torch.max(logits, 1)
         all_labels.extend(labels.cpu().numpy())
         all_preds.extend(preds.cpu().numpy())
@@ -177,6 +195,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, writer, de
 
     return acc
 
+
 def evaluate(model, test_loader, criterion, epoch, writer, device):
     model.eval()
     total_loss = 0.0
@@ -187,14 +206,12 @@ def evaluate(model, test_loader, criterion, epoch, writer, device):
         for images, labels in tqdm(test_loader, desc="Evaluating", leave=False):
             images, labels = images.to(device), labels.to(device)
 
-            #try: 
-           #     logits = model(images, labels)
-            #except:
+            # Forward pass
             logits = model(images)
-
             loss = criterion(logits, labels)
             total_loss += loss.item()
 
+            # Calculate predictions
             _, preds = torch.max(logits, 1)
             all_labels.extend(labels.cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
@@ -223,8 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--tensorboard-dir", type=str, default="/opt/ml/output/tensorboard/", help="Directory for TensorBoard logs")
     parser.add_argument("--model-dir", type=str, default="./models", help="Directory to save trained models")
     parser.add_argument("--model-type", type=str, default="vir", choices=["vir", "vit", "virface", "vitface"], help="Model type to train (vir or vit)")
-    parser.add_argument("--data-dir", type=str, default="./models", help="Directory to save trained models")
-    
+    parser.add_argument("--data-dir", type=str, default="./data", help="Directory containing the dataset")
 
     args = parser.parse_args()
     train(args)
