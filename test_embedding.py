@@ -380,7 +380,7 @@ def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
         ax.add_artist(ab)
         plt.scatter(x, y, c=bg_color, alpha=0.8)
 
-    plt.title(f"UMAP Visualization of Face Feature Embeddings with Class Regions\n({len(selected_names)} People)")
+    plt.title(f"")
     plt.xlabel("UMAP component 1")
     plt.ylabel("UMAP component 2")
 
@@ -392,11 +392,11 @@ def visualize_with_umap(features, num_people=5, random_seed=42, save_path=None):
                                 markersize=10)
                       for name in selected_names_sorted]
 
-    plt.legend(handles=legend_elements, 
-              title="People (Image Count)",
-              bbox_to_anchor=(1.05, 1),
-              loc='upper left',
-              borderaxespad=0.)
+    #plt.legend(handles=legend_elements, 
+    #          title="People (Image Count)",
+    #          bbox_to_anchor=(1.05, 1),
+    #          loc='upper left',
+    #          borderaxespad=0.)
 
     plt.tight_layout()
 
@@ -500,6 +500,7 @@ def lfw_test_with_features(model, pair_list, feature_save_path=None, tsne_save_p
 def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Evaluate a face recognition model on LFW")
+    parser.add_argument('--model', type=str, required=True, help="Choose vir or vit")
     parser.add_argument('--test_model_path', type=str, required=True, help="Path to the pretrained model (.pth file)")
     parser.add_argument('--dataset_root', type=str, required=True, help="Root directory for the LFW dataset")
     parser.add_argument('--pair_file', type=str, default="hasil/pair.txt", help="File to save the generated pair list")
@@ -510,18 +511,38 @@ def main():
     args = parser.parse_args()
 
     # Initialize model
-    from reformer.vit_pytorch import ViT
-    model = ViT(
-            image_size = 224,
-            patch_size = 8,
-            num_classes = 68,
-            dim = 256,
-            depth = 12,
-            heads = 8,
-            mlp_dim = 2048,
-            dropout = 0.1,
-            emb_dropout = 0.1
-        )
+    if args.model == "vit":
+      from reformer.vit_pytorch import ViT
+      model = ViT(
+              image_size = 224,
+              patch_size = 8,
+              num_classes = 68,
+              dim = 256,
+              depth = 12,
+              heads = 8,
+              mlp_dim = 2048,
+              dropout = 0.1,
+              emb_dropout = 0.1
+          )
+    
+    if args.model == "vir":
+      from reformer.vir_pytorch import ViR
+      model = ViR(
+            img_size=224,
+            patch_size=8,
+            in_channels=3,  # Corrected from 1000 to 3 (input channels for RGB images)
+            num_classes=68,
+            dim=256,
+            depth=12,
+            heads=8,
+            bucket_size=5,
+            n_hashes=1,
+            ff_mult=4,  # Added missing argument
+            lsh_dropout=0.1,  # Corrected from dropout to lsh_dropout
+            ff_dropout=0.1,  # Added missing argument
+            emb_dropout=0.1,
+            use_rezero=False  # Added missing argument
+          )
     
     # Load pretrained weights and move model to GPU
     load_model(model, args.test_model_path)
@@ -532,7 +553,7 @@ def main():
     #remove_black_images(args.dataset_root)
     
     # Generate pair list for testing
-    generate_lfw_pair_list(args.dataset_root, args.pair_file, num_pairs=6000)
+    #generate_lfw_pair_list(args.dataset_root, args.pair_file, num_pairs=6000)
 
     # Perform LFW test
     lfw_test_with_features(

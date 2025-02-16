@@ -969,7 +969,7 @@ class ViRWithArcMargin(nn.Module):
         x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
 
         x = self.to_latent(x)
-        return x, dim=1
+        return x
 
 # =================================================================================================================================
 
